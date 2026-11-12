@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cwchar>
 #include <cwctype>
 #include <fstream>
 #include <iterator>
@@ -718,6 +719,34 @@ bool has_saves(const fs::path& save) {
     return fs::is_directory(data, ec) && !fs::is_empty(data, ec);
 }
 
+fs::path update_in(const fs::path& named) {
+    std::error_code ec;
+    if (named.empty() || !fs::is_directory(named, ec))
+        return {};
+    if (is_update_folder(named))
+        return named;
+    for (const fs::directory_entry& entry : fs::directory_iterator(named, ec))
+        if (entry.is_directory(ec) && is_update_folder(entry.path()))
+            return entry.path();
+    return {};
+}
+
+std::wstring progress_line(const std::wstring& line) {
+    // install()'s own lines, and the last line prepare.py and link.py print.
+    static const struct { const wchar_t *starts, *progress; } steps[] = {
+        {L"Preparing the game", L"progress 0.05 Reading your copy"},
+        {L"AppContent profile", L"progress 0.45 Linking the game"},
+        {L"Linked modules", L"progress 0.75 Checking your CPU"},
+        {L"prepared ", L"progress 0.9 Writing the settings"},
+        {L"wrote    paths.ini", L"progress 1 Ready"},
+    };
+    size_t text = line.find_first_not_of(L' '); // run() indents what the scripts print
+    for (const auto& step : steps)
+        if (text != std::wstring::npos && line.compare(text, std::wcslen(step.starts), step.starts) == 0)
+            return step.progress;
+    return {};
+}
+
 fs::path install(const Options& opt, const Log& log) {
     fs::path root = clean(opt.root), game = game_folder(opt.game), save = clean(opt.save);
     fs::path update = opt.update.empty() ? fs::path() : clean(opt.update);
@@ -729,7 +758,8 @@ fs::path install(const Options& opt, const Log& log) {
     if (!update.empty() && !is_update_folder(update))
         fail(L"This folder isn't a decrypted Dead Nation update (eboot.bin and sce_sys\\param.sfo):\n" + text(update) +
              L"\n\nChoose another one, or leave it empty to play the dump's own version.");
-    if (!update.empty() && (inside(root, update) || inside(update, root) || same_path(update, game)))
+    bool launcher_update = opt.update_in_release && inside(update, root / L"update");
+    if (!update.empty() && (inside(root, update) || (inside(update, root) && !launcher_update) || same_path(update, game)))
         fail(L"Keep the update folder apart from the game folder and this folder.");
 
     std::error_code ec;

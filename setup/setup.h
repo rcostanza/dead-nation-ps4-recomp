@@ -26,6 +26,7 @@ struct Options {
     std::optional<std::filesystem::path> copy_saves_from; // the old save folder, whose saves go to `save`
     std::optional<bool> skip_intro; // settings.ini skip_intro to write; unset keeps what is there
     std::filesystem::path update; // optional: the decrypted update (patch) served over the dump; empty for none
+    bool update_in_release = false; // --prepare: the update may be root/update (RecompLauncher puts it there)
 };
 
 // The folders a release folder's paths.ini names.
@@ -90,6 +91,13 @@ std::optional<std::wstring> read_setting(const std::filesystem::path& ini, const
 // Sets `key` in a settings.ini: its first line is replaced and any later ones dropped, or the line is
 // added at the end; the other lines (comments too) and their line endings stay. Throws Error.
 void write_setting(const std::filesystem::path& ini, const std::wstring& key, const std::wstring& value);
+
+// --prepare's update: `named` when it is an update folder, else the update folder directly inside it
+// (where a launcher may have put the one the player picked); empty when there is none.
+std::filesystem::path update_in(const std::filesystem::path& named);
+// The "progress <0..1> <step>" line a launcher's setup screen shows for a line install() logs
+// (--prepare, RecompLauncher); empty for a line that starts no new step.
+std::wstring progress_line(const std::wstring& line);
 
 // Sets up opt.root, reporting each step through `log`. Throws Error. Returns the game exe's path.
 std::filesystem::path install(const Options& opt, const Log& log);

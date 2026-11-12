@@ -9,7 +9,7 @@
 //
 //     deadnation-setup.exe --game <dump or eboot.bin> [--update <folder>|--no-update]
 //                           [--save <folder>] [--copy-saves] [--skip-intro|--play-intro]
-//                           [--shortcut <folder>|desktop]
+//                           [--shortcut <folder>|desktop] [--prepare]
 
 #include "setup.h"
 
@@ -80,7 +80,7 @@ private:
 constexpr wchar_t kUsage[] =
     L"usage: deadnation-setup.exe --game <dump or eboot.bin> [--update <folder>|--no-update]\n"
     L"                             [--save <folder>] [--copy-saves] [--skip-intro|--play-intro]\n"
-    L"                             [--shortcut <folder>|desktop]\n"
+    L"                             [--shortcut <folder>|desktop] [--prepare]\n"
     L"  --game        the decrypted game dump (eboot.bin, sce_module, sce_sys, stream.dat); only ever read\n"
     L"  --update      the decrypted update (patch, e.g. CUSA00236-patch), served over the dump; its\n"
     L"                version is the one played (default: the one paths.ini names); --no-update plays\n"
@@ -91,12 +91,14 @@ constexpr wchar_t kUsage[] =
     L"                skip the start-up logos and notices, or show them again\n"
     L"                (settings.ini skip_intro; default: leave it as it is)\n"
     L"  --shortcut    also write the game's shortcut into this folder, or onto the Desktop\n"
+    L"  --prepare     for launchers (RecompLauncher): also print \"progress <0..1> <step>\" lines; the\n"
+    L"                update is only --update's folder, if it exists (it may be update\\ here)\n"
     L"Sets up the folder this exe is in. With no arguments, opens the setup window.";
 
 int run_cli(const std::vector<std::wstring>& args) {
     Console con;
     std::wstring game, save, shortcut, update;
-    bool copy_saves = false, no_update = false;
+    bool copy_saves = false, no_update = false, prepare = false;
     std::optional<bool> skip_intro;
     for (size_t i = 0; i < args.size(); ++i) {
         const std::wstring& a = args[i];
@@ -113,6 +115,8 @@ int run_cli(const std::vector<std::wstring>& args) {
             skip_intro = a == L"--skip-intro";
         } else if (a == L"--no-update") {
             no_update = true;
+        } else if (a == L"--prepare") {
+            prepare = true;
         } else {
             con.err(a == L"--help" || a == L"-h" ? kUsage : std::wstring(kUsage) + L"\n\nunexpected: " + a);
             return 2;
@@ -129,12 +133,22 @@ int run_cli(const std::vector<std::wstring>& args) {
         auto old = setup::remembered_paths(opt.root);
         opt.save = !save.empty() ? fs::path(save) : old ? old->save : setup::default_save();
         opt.update = no_update ? fs::path() : !update.empty() ? fs::path(update) : old ? old->update : fs::path();
+        // --prepare: the launcher names the update each time, and passes its folder even when the
+        // player added none.
+        if (prepare) {
+            opt.update = no_update ? fs::path() : setup::update_in(update);
+            opt.update_in_release = true;
+        }
         if (copy_saves)
             opt.copy_saves_from = saves_to_move(opt.root, opt.save);
         opt.skip_intro = skip_intro;
         if (std::wstring warning = setup::version_warning(opt.game, opt.update); !warning.empty())
             con.err(L"Warning:\n" + warning + L"\n");
-        fs::path exe = setup::install(opt, [&](const std::wstring& line) { con.out(line); });
+        fs::path exe = setup::install(opt, [&](const std::wstring& line) {
+            con.out(line);
+            if (std::wstring step = setup::progress_line(line); prepare && !step.empty())
+                con.out(step);
+        });
         if (!shortcut.empty()) {
             fs::path lnk = (shortcut == L"desktop" ? setup::desktop_folder() : fs::path(shortcut)) / setup::kShortcutName;
             setup::create_shortcut(exe, lnk);
