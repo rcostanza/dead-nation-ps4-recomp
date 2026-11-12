@@ -4,6 +4,7 @@
 #include "runtime.h"
 #include <ctype.h>
 #include <stdatomic.h>
+#include <time.h>
 
 /* ---- libSceHttp (shadPS4 http.cpp), offline ---- */
 #define HTTP_NETWORK ((int32_t)0x80431063)
