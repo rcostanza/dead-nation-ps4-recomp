@@ -132,6 +132,6 @@ I (human) am a programmer, but I know nothing about C++ which is required to mak
 
 ## Credits and license
 
-Based on [resogun-pc](https://github.com/rcostanza/resogun-recomp), itself inspired by [theatrhythm-fbl-pc](https://github.com/YAPhoa/theatrhythm-fbl-pc).
+Based on [resogun-recomp](https://github.com/rcostanza/resogun-recomp), itself inspired by [theatrhythm-fbl-pc](https://github.com/YAPhoa/theatrhythm-fbl-pc).
 
 GPL-2.0-or-later, see [LICENSE](LICENSE). Runtime follows [shadPS4](https://github.com/shadps4-emu/shadPS4). Dead Nation is a game by Housemarque, published by Sony Interactive Entertainment; this project is not affiliated with or endorsed by either.
