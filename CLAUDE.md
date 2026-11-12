@@ -75,7 +75,10 @@ them skip without them.
   `Srgb` for plain windows), shared with `settings/main.cpp`: settings.exe (Linux `settings`),
   SDL3 renderer + ImGui, statically linked on Windows. It writes each change at once with
   `setup::write_setting` into the save folder's settings.ini, else the exe folder's (`--config` overrides).
-  A new display option goes in the overlay's rows and settings.exe's both.
+  A new display option goes in the overlay's rows and settings.exe's both, and in `recomplauncher.json`'s
+  `settings` (RecompLauncher; shipped at the release's top by `tools/package.py`, schema at
+  recomplauncher.com/schema/recomplauncher.json). Its Easy Setup runs `deadnation-setup --prepare`
+  (progress lines, the update from `update/` in the release folder when the player added one).
 - deadnation-setup.exe's window (`setup/main.cpp`, Win32 GDI) draws the same look by hand: the `Srgb`
   palette copied into its `color` namespace, Roboto Condensed embedded as RCDATA in `setup/setup.rc`
   (`AddFontMemResourceEx`). Keep its colours in step with `deadnation_page.h`. The Linux setup has no

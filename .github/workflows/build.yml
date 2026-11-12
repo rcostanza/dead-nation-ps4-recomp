@@ -105,7 +105,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.RELEASE }}
-          path: out/${{ env.RELEASE }}.zip
+          path: out/${{ env.RELEASE }}-windows-x64.zip
           compression-level: 0
       - uses: actions/upload-artifact@v4
         with:
@@ -165,7 +165,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.RELEASE }}-linux
-          path: out/${{ env.RELEASE }}-linux.tar.gz
+          path: out/${{ env.RELEASE }}-linux-x64.tar.gz
           compression-level: 0
       - uses: actions/upload-artifact@v4
         with:
@@ -197,7 +197,7 @@ jobs:
           path: out
       - name: ${{ matrix.image }}
         run: |
-          mkdir -p unpacked && tar -xzf out/*-linux.tar.gz -C unpacked
+          mkdir -p unpacked && tar -xzf out/*-linux-x64.tar.gz -C unpacked
           docker run --rm -v "$PWD:/w" "${{ matrix.image }}" \
             bash /w/.github/scripts/smoke-test.sh "/w/unpacked/${{ needs.linux.outputs.release }}"
 
@@ -235,7 +235,7 @@ jobs:
             echo
             echo "## Install"
             echo
-            echo "Download ${WINDOWS}.zip (Windows) or ${LINUX}-linux.tar.gz (Linux), then follow the [install instructions in the README](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/README.md#install-and-play)."
+            echo "Download ${WINDOWS}-windows-x64.zip (Windows) or ${LINUX}-linux-x64.tar.gz (Linux), then follow the [install instructions in the README](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/README.md#install-and-play)."
           } > notes.md
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
-            --notes-file notes.md "out/${WINDOWS}.zip" "out/${LINUX}-linux.tar.gz"
+            --notes-file notes.md "out/${WINDOWS}-windows-x64.zip" "out/${LINUX}-linux-x64.tar.gz"

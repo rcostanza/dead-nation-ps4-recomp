@@ -2,6 +2,8 @@
 
 # Dead Nation (PS4) - Recompiled to PC
 
+<a href="https://recomplauncher.com"><picture><source media="(prefers-color-scheme: dark)" srcset="https://recomplauncher.com/assets/press/launcher/badge-light.svg"><img alt="Get it on RecompLauncher" src="https://recomplauncher.com/assets/press/launcher/badge-dark.svg" height="48"></picture></a>
+
 An (obviously) unofficial native PC runner for the PS4 version of <b>Dead Nation</b>, Housemarque's top-down zombie twin-stick shooter.
 
 The game's own x86-64 code runs directly on Windows and Linux: the PS4 system libraries it calls are reimplemented, and its GPU commands are drawn with Vulkan.
@@ -40,6 +42,12 @@ This requires a decrypted dump of your own copy of the game. Tested with **CUSA0
 
 ## Install and play
 
+With [RecompLauncher](https://recomplauncher.com): install the recomp there, pick your dump folder (and
+the update folder, if you have it) on its setup screen, and press Play. The display settings are on
+the game's page too.
+
+By hand:
+
 1. [Download the latest release here](https://github.com/rcostanza/dead-nation-ps4-recomp/releases/latest)
 2. Unzip the release anywhere, for example `C:\Games\DeadNation`.
 3. Run `deadnation-setup.exe`.
@@ -56,7 +64,7 @@ deadnation-setup.exe --game <dump> [--update <folder>] [--save <folder>]
 
 ### On Linux
 
-1. Extract the release anywhere you can write: `tar -xzf deadnation-pc-<version>-linux.tar.gz -C ~/Games`
+1. Extract the release anywhere you can write: `tar -xzf deadnation-pc-<version>-linux-x64.tar.gz -C ~/Games`
 2. Run `deadnation-setup`: from a file manager it asks with dialogs, in a terminal it asks there. It also
    takes `--game <dump> [--update <folder>] [--save <folder>]`.
 3. Start the game from the menu entry it adds, or run `./deadnation`.
