@@ -1,0 +1,6 @@
+#include <winuser.h>
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "setup.manifest"
+1 ICON "../res/deadnation.ico"
+// Roboto Condensed Light and Bold (main.cpp load_fonts): the game menus' look, as settings.exe.
+101 RCDATA "../gpu/third_party/fonts/RobotoCondensed-Light.ttf"
+102 RCDATA "../gpu/third_party/fonts/RobotoCondensed-Bold.ttf"
