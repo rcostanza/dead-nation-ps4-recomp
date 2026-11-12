@@ -86,7 +86,7 @@ Unzip the new release over the old folder and run the setup once more (the game 
 
 The game sees one DualShock 4. Any gamepad works, mapped by button position: on an Xbox pad A B X Y
 are Cross, Circle, Square, Triangle, LB/RB are L1/R1, LT/RT are L2/R2, Menu is Options and View
-clicks the touchpad. The keyboard works alongside a gamepad:
+clicks the touchpad. The keyboard works alongside a gamepad (no mouse aiming _yet_):
 
 | Keys                      | PS4                      |
 | ------------------------- | ------------------------ |
