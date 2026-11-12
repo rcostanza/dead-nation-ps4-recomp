@@ -40,7 +40,7 @@ This requires a decrypted dump of your own copy of the game. Tested with **CUSA0
 
 ## Install and play
 
-1. [Download the latest release here](https://github.com/rcostanza/dead-nation-recomp/releases/latest)
+1. [Download the latest release here](https://github.com/rcostanza/dead-nation-ps4-recomp/releases/latest)
 2. Unzip the release anywhere, for example `C:\Games\DeadNation`.
 3. Run `deadnation-setup.exe`.
 4. Choose your **game folder** (the dump), optionally an **update folder**, and a **save folder** (by default `save` inside the release folder). Each row says whether the folder is usable. Press **Install**: setup prepares the game from your dumps in a few seconds and offers a desktop shortcut. Your dumps are only read, never changed.
