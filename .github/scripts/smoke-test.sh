@@ -60,7 +60,7 @@ grep -q 'The game is not set up yet' "$work/unset.log" || { cat "$work/unset.log
 mkdir -p "$work/empty" "$work/dump/sce_sys" "$work/dump/sce_module"
 status=0
 ./deadnation-setup --game "$work/empty" --save "$work/save" >"$work/setup-empty.log" 2>&1 || status=$?
-grep -q "isn't a decrypted DeadNation dump" "$work/setup-empty.log" ||
+grep -q "isn't a decrypted Dead Nation dump" "$work/setup-empty.log" ||
     { cat "$work/setup-empty.log"; fail 'the setup took a folder without eboot.bin'; }
 for f in eboot.bin sce_sys/param.sfo sce_module/libc.prx sce_module/libSceFios2.prx audio.pck stream.dat; do
     : >"$work/dump/$f"
