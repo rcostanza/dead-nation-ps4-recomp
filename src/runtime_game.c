@@ -283,7 +283,6 @@ static unsigned char *patch_view_rect(unsigned char *image, unsigned char *stub)
  * tick sees it released and the next one sees it again if it came back (a turbo button's presses
  * and releases, at most 15 of each a second). At 30 FPS every frame is a tick and nothing changes. */
 static volatile unsigned char logic_tick=1;
-static int logic_patched;
 /* patch_updates: the updates the next frame runs (`wanted`, set at each flip), those it has run
  * (`done`, written by the loop after each update) and which of them tick the item scripts. */
 static struct { volatile int32_t wanted, done; } updates={1,0};
@@ -398,7 +397,6 @@ static unsigned char *patch_logic(unsigned char *image, unsigned char *stub) {
     *t++=0xc3;                                              /* skip: ret */
     const int32_t to=(int32_t)(stub-(at+5));
     at[0]=0xe8; memcpy(at+1,&to,4);                         /* call stub */
-    logic_patched=1;
     return t;
 }
 
