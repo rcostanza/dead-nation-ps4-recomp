@@ -86,7 +86,7 @@ Run deadnation-setup.exe again to change the game or save folder. After unpackin
 over this folder, run it once more: it keeps your folders and settings.
 
 In the game: F10, or Select (Share/View) held for two seconds, opens the display settings (window,
-resolution, VSync, 30/60/90/120/144/180/240 FPS); F4, Select+Start, or Back on the title screen, asks to close the game.
+resolution, VSync, 30/60/90/120/144/180/240/360 FPS); F4, Select+Start, or Back on the title screen, asks to close the game.
 
 settings.ini (made by the setup) holds the window, audio and control options; one in your save
 folder is read instead, and the display settings and settings.exe save there. If the game stops, the reason is in
@@ -114,7 +114,7 @@ Run deadnation-setup again to change the game or save folder. After unpacking a 
 over this folder, run it once more: it keeps your folders and settings.
 
 In the game: F10, or Select (Share/View) held for two seconds, opens the display settings (window,
-resolution, VSync, 30/60/90/120/144/180/240 FPS); F4, Select+Start, or Back on the title screen, asks to close the game.
+resolution, VSync, 30/60/90/120/144/180/240/360 FPS); F4, Select+Start, or Back on the title screen, asks to close the game.
 
 settings.ini (made by the setup) holds the window, audio and control options; one in your save
 folder is read instead, and the display settings and settings.exe save there. If the game stops, the reason is in

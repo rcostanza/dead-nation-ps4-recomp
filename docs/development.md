@@ -114,7 +114,7 @@ says so. Each address is also checked against the bytes it expects before it is 
 
 Dead Nation's main loop (1.03: 0xcafe70) measures real time and runs the game's update in fixed steps
 of 1/fps (at most 8 a frame), so its speed is real time at any rate. The game sets the rate to 30 at
-boot. `frame_rate` (30, 60, 90, 120, 144, 180 or 240) is applied at each flip by
+boot. `frame_rate` (30, 60, 90, 120, 144, 180, 240 or 360) is applied at each flip by
 `runtime_game_frame_rate()`, which calls the engine clock's `set_fps` (the global at 1.03 +0x1bf6958,
 vtable slot 3; target at +8, step at +0xc). Before its first change the runner checks the clock: a
 vtable in the image's data, `set_fps` in its code and a target near 30 or 60; otherwise the game keeps

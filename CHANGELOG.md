@@ -9,6 +9,7 @@ in release text as a break.
 
 - Retuned game speed logic according to the FPS cap; rate of fire should now be consistent regardless
 - Quitting to the main menu no longer drops the game to 30 FPS in slow motion
+- Added 360 FPS cap option. Note: you might need to reduce rendering resolution to achieve that, it's a taxing game
 
 ## v0.1
 

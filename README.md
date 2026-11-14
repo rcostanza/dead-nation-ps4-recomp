@@ -14,7 +14,7 @@ This requires a decrypted dump of your own copy of the game. Tested with **CUSA0
 
 ## Features
 
-- **30, 60, 90, 120, 144, 180 or 240 FPS** at normal game speed (the PS4 version runs at 30): the engine's own frame clock follows the setting.
+- **30, 60, 90, 120, 144, 180, 240 or 360 FPS** at normal game speed (the PS4 version runs at 30): the engine's own frame clock follows the setting.
   - Note: there's no uncapped FPS, if your device can't reach the chosen rate the game slows down instead of skipping frames. Choose a rate your PC holds.
 - **1440p and 4K rendering** (filtered down to the window), the PS4's native 1080p, or 720p for weaker GPUs. 4K costs about three times the GPU work of 1080p; pick the one that matches your screen.
 - **Multiple aspect ratio options:** 21:9 and 32:9 show more of the level to the sides; the menus and HUD stay 16:9 in the middle. 4:3 and 16:10 show the same width and more of the level above and below, with the menus and HUD whole.
@@ -82,7 +82,7 @@ Unzip the new release over the old folder and run the setup once more (the game 
 - window mode, windowed resolution (applied a second after you stop changing it) and monitor. The fullscreen modes pick their size from the screen;
 - VSync, and tearing with VSync off (the least input delay);
 - aspect ratio: 4:3, 16:10, 16:9, 21:9 or 32:9 (at the next start);
-- frame rate: 30 (the PS4's), 60, 90, 120, 144, 180 or 240, held to what your display refreshes at (180 on a 120 Hz display runs at 120) unless VSync is off with tearing allowed;
+- frame rate: 30 (the PS4's), 60, 90, 120, 144, 180, 240 or 360, held to what your display refreshes at (180 on a 120 Hz display runs at 120) unless VSync is off with tearing allowed;
 - render resolution (720p, 1080p, 1440p or 4K, at the next start; 4K is the heaviest by far, so match it to your screen);
 - sharpening (AMD FSR 1 RCAS, on by default), applied at once; **F9** also switches it over the game, to compare;
 

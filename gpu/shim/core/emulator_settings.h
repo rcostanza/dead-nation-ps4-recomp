@@ -16,7 +16,7 @@ extern "C" int deadnation_render_width(void);
 extern "C" int deadnation_width_4k(void);  // deadnation_settings.cpp: the display width at 2160 lines
 inline bool DeadNationRender4k() { return deadnation_render_4k() != 0; }
 extern "C" int deadnation_hdr(void); // deadnation_settings.cpp: settings.ini hdr
-extern "C" int deadnation_frame_rate(void); // deadnation_settings.cpp: frame_rate (30, 60, 90, 120, 144, 180)
+extern "C" int deadnation_frame_rate(void); // deadnation_settings.cpp: frame_rate (30, 60, 90, 120, 144, 180, 240, 360)
 
 enum GpuReadbacksMode : int { Disabled, Relaxed, Precise };
 

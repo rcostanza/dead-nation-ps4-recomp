@@ -101,7 +101,8 @@
         { "label": "120", "set": { "frame_rate": "120" } },
         { "label": "144", "set": { "frame_rate": "144" } },
         { "label": "180", "set": { "frame_rate": "180" } },
-        { "label": "240", "set": { "frame_rate": "240" } }
+        { "label": "240", "set": { "frame_rate": "240" } },
+        { "label": "360", "set": { "frame_rate": "360" } }
       ],
       "defaults": { "frame_rate": "60" }
     },
