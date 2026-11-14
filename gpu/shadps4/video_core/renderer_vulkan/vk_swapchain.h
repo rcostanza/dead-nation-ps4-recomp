@@ -128,6 +128,7 @@ private:
     vk::PresentModeKHR present_mode;
     bool vsync = true;     ///< the settings present_mode was chosen for
     bool tearing = false;
+    bool exclusive_allowed = false; ///< deadnation: display mode is Fullscreen (VK_EXT_full_screen_exclusive)
     vk::Extent2D extent;
     vk::SurfaceTransformFlagBitsKHR transform;
     vk::CompositeAlphaFlagBitsKHR composite_alpha;

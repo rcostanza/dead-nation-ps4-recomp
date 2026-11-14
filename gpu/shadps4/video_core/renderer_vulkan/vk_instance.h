@@ -313,6 +313,11 @@ public:
         return nv_checkpoints;
     }
 
+    /// deadnation: VK_EXT_full_screen_exclusive is enabled (Windows drivers that have it).
+    bool HasFullScreenExclusive() const {
+        return full_screen_exclusive;
+    }
+
     /// Returns the vendor ID of the physical device
     u32 GetVendorID() const {
         return properties.vendorID;
@@ -595,6 +600,7 @@ private:
     bool pipeline_executable_properties{}; // deadnation: DEADNATION_WAVE_STATS=1 (vk_wave_stats.h)
     bool amd_shader_info{};                // deadnation: with it, VK_AMD_shader_info when present
     bool supports_memory_budget{};
+    bool full_screen_exclusive{}; // deadnation: VK_EXT_full_screen_exclusive (Windows)
     bool supports_block_texel_view{};
     u64 total_memory_budget{};
     std::vector<size_t> valid_heaps;

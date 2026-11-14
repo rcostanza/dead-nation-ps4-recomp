@@ -59,7 +59,7 @@ void Swapchain::Create(u32 width_, u32 height_) {
     const vk::SharingMode sharing_mode =
         exclusive ? vk::SharingMode::eExclusive : vk::SharingMode::eConcurrent;
     const auto format = needs_hdr ? SURFACE_FORMAT_HDR : surface_format;
-    const vk::SwapchainCreateInfoKHR swapchain_info = {
+    vk::SwapchainCreateInfoKHR swapchain_info = {
         .surface = surface,
         .minImageCount = image_count,
         .imageFormat = format.format,
@@ -77,6 +77,23 @@ void Swapchain::Create(u32 width_, u32 height_) {
         .clipped = true,
         .oldSwapchain = nullptr,
     };
+#ifdef _WIN32
+    // deadnation: a window covering the screen is otherwise taken over by the driver (NVIDIA,
+    // AMD) as exclusive fullscreen, so Borderless behaved as Fullscreen: alt-tab switched the
+    // display mode. Only the Fullscreen display mode lets the driver do it. The struct is
+    // VkSurfaceFullScreenExclusiveInfoEXT (vulkan_win32.h, not included here): 1 is
+    // VK_FULL_SCREEN_EXCLUSIVE_ALLOWED_EXT, 2 VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT.
+    exclusive_allowed = DeadNationSettings::Get().display_mode == DeadNationGraphics::Fullscreen;
+    const struct {
+        VkStructureType sType;
+        const void* pNext;
+        int32_t fullScreenExclusive;
+    } exclusive_info = {VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT, nullptr,
+                        exclusive_allowed ? 1 : 2};
+    if (instance.HasFullScreenExclusive()) {
+        swapchain_info.pNext = &exclusive_info;
+    }
+#endif
 
     auto [swapchain_result, chain] = instance.GetDevice().createSwapchainKHR(swapchain_info);
     if (swapchain_result == vk::Result::eErrorNativeWindowInUseKHR ||
@@ -265,7 +282,9 @@ void Swapchain::FindPresentMode() {
 
 void Swapchain::UpdateVsync() {
     const auto& settings = DeadNationSettings::Get();
-    if (settings.vsync == vsync && settings.tearing == tearing) {
+    const bool exclusive = settings.display_mode == DeadNationGraphics::Fullscreen;
+    if (settings.vsync == vsync && settings.tearing == tearing &&
+        (exclusive == exclusive_allowed || !instance.HasFullScreenExclusive())) {
         return;
     }
     if (const auto result = instance.GetDevice().waitIdle(); result != vk::Result::eSuccess) {

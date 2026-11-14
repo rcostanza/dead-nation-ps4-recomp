@@ -436,6 +436,12 @@ bool Instance::CreateDevice() {
                     nv_diagnostics_config ? "on" : "unavailable");
     }
     supports_memory_budget = add_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+#ifdef _WIN32
+    // deadnation: borderless asks the driver not to take the screen over (vk_swapchain.cpp).
+    full_screen_exclusive = add_extension("VK_EXT_full_screen_exclusive");
+    std::printf("GPU: full-screen exclusive control %s\n",
+                full_screen_exclusive ? "on (Borderless stays a window)" : "unavailable");
+#endif
     shader_clock = add_extension(VK_KHR_SHADER_CLOCK_EXTENSION_NAME);
     if (shader_clock) {
         shader_clock_features = feature_chain.get<vk::PhysicalDeviceShaderClockFeaturesKHR>();
