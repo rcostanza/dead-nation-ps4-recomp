@@ -50,11 +50,14 @@ them skip without them.
   - screens: screen manager push/pop hooked at entry (stub records rdi); stack vector at manager
     +0xa8/+0xb0, top screen's vtable[2] is its name. Logged as `Screen: <name>`.
   - frame clock (01.03 +0x1bf6958): set_fps is vtable slot 3, target at +8, step at +0xc. The game
-    sets 30 at boot; game speed is real time at any rate (fixed-step accumulator).
+    sets 30 at boot. The update loop (0xcaf980) ran one update a frame of the step and dropped the
+    rest; `patch_updates` makes it run `updates.wanted` fixed steps (set per flip by `update_count`
+    from real time, 1 to fps/30), so game speed stays real time when the PC falls short of the rate.
+    Keep the step fixed: a variable step (the frame's time) broke the zombies' walk animation.
   - item script ticks (`patch_logic`): the Lua scripts count update ticks, not seconds (weapon fire
     rate, cooldowns), so the items' (weapons') scripts stay at the PS4's 30 a second at any frame
     rate: the per-item runner call in the item job (01.03 0xdf04d8 to 0xdf38f0) is skipped on frames
-    without a tick, and gets 1/30 s on a tick (`logic_tick`, decided at each flip). Item events last
+    without a tick, and gets 1/30 s on a tick (per update: `tick_mask` by `updates.done`, set at each flip). Item events last
     one frame, so `item_events` tracks what the frames since the last tick brought: the events sent
     to the item (context +0x8c/+0x94, zeroed per item at 0xdeb356; R2's "action") and the area
     events in its reach (context +0x60/+0x68, a switch's "door-open"); the event test 0xdf0190 reads

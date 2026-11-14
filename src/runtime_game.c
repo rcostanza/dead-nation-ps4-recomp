@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 #include "gpu/deadnation_gpu.h"
 
 /* eboot.bin builds the runner has been run with, and in each: the screen manager's two methods
@@ -18,14 +19,15 @@ typedef struct {
     const char *sha256, *version;
     uint32_t screen_push, screen_pop, clock, code_end, data, data_end, render_size, persp_call, ortho_call, finalize, view_rect, ortho_aspect, view_fov;
     uint32_t item_call, item_runner; /* the items' script runner and its call (patch_logic) */
+    uint32_t update_stop, update_loop; /* the update loop's stop test and loop test (patch_updates) */
 } Build;
 static const Build known_builds[]={
     {"09b367a222cfb6308811650ae1fb8105ea6c7726137646907b211419027aa37c","01.03",
      0xe21940,0xe21150,0x1bf6958,0x13b4920,0x13b8000,0x1bf6ef0,0xc88010,0xce352a,0xce3658,0xce2cf0,0xcebbd1,0xceb3db,0xddadd7,
-     0xdf04d8,0xdf38f0},
+     0xdf04d8,0xdf38f0,0xcafa65,0xcafb00},
     {"8d2ae241ca42585d0b2601554720f198a7ef63c0b6f80fc34325883530ab8135","01.00",
      0xe1f600,0xe1f4b0,0x1bf26f8,0x13b2418,0x13b4000,0x1bf2c90,0xc866d0,0xce17aa,0xce18d8,0xce0f70,0xce9e51,0xce965b,0xdd9837,
-     0xdeeca8,0xdf20c0},
+     0xdeeca8,0xdf20c0,0xcadce5,0xcadd80},
 };
 static const Build *build;
 static unsigned char *game_image;
@@ -267,8 +269,9 @@ static unsigned char *patch_view_rect(unsigned char *image, unsigned char *stub)
  * the world's double buffers and builds what is drawn); per item it calls a runner that
  * evaluates the item's script (01.03 0xdf38f0 at 0xdf04d8, 01.00 0xdf20c0 at 0xdeeca8) with the
  * frame's time in xmm0 and at [rdx], the item's context. A stub asks `item_events` first: on
- * frames without a tick the call is skipped, and on a tick the runner gets 1/30 s. `logic_tick`
- * is set at each flip (one world update a frame). The characters' and directors' runners are
+ * updates without a tick the call is skipped, and on a tick the runner gets 1/30 s. Which of the
+ * next frame's updates tick (`tick_mask`, by `updates.done`; `logic_tick` when the update loop
+ * is not patched) is set at each flip (update_count). The characters' and directors' runners are
  * left alone.
  * Events last one frame, so a tick sees those of the frames since the last one. A script's event
  * test (01.03 0xdf0190) looks in two places: the events sent to the item, gathered into its
@@ -281,6 +284,11 @@ static unsigned char *patch_view_rect(unsigned char *image, unsigned char *stub)
  * and releases, at most 15 of each a second). At 30 FPS every frame is a tick and nothing changes. */
 static volatile unsigned char logic_tick=1;
 static int logic_patched;
+/* patch_updates: the updates the next frame runs (`wanted`, set at each flip), those it has run
+ * (`done`, written by the loop after each update) and which of them tick the item scripts. */
+static struct { volatile int32_t wanted, done; } updates={1,0};
+static volatile uint32_t tick_mask=1;
+static int updates_patched;
 enum { item_slots=8192, item_event_max=19, item_tracked=24 };
 typedef struct {
     uint32_t hash; float value, carried;
@@ -338,7 +346,8 @@ static int ABI item_events(unsigned char *ctx) {
         if (e->here) { if (e->gap && e->last) e->again=1; e->seen=1; }
         else e->gap=1;
     }
-    if (!logic_tick) return 0;
+    const int32_t update=updates_patched ? updates.done : 0;
+    if (!(updates_patched ? update<32 && (tick_mask>>update&1) : logic_tick)) return 0;
     int32_t n=0, kept=0;
     for (int32_t k=0;k<t->count;++k) {
         ItemTrack e=t->events[k];
@@ -393,6 +402,40 @@ static unsigned char *patch_logic(unsigned char *image, unsigned char *stub) {
     return t;
 }
 
+/* The game's update loop (01.03 0xcaf980, 01.00 0xcadc00) runs one update a frame of the clock's
+ * step (1/fps) and drops the rest of the time the frame took: its test after an update stops when
+ * one update has run (or the update took longer than a step), so a frame slower than 1/fps slowed
+ * the game down (240 FPS shown at 180 ran at 3/4 speed). Patched, the loop runs `updates.wanted`
+ * updates of 1/fps, set at each flip from the real time since the last one (update_count), and
+ * writes the number run to `updates.done`. A fixed step keeps every system as it is at the frame
+ * rate (a step of the frame's time instead broke the zombies' walk). The stop test becomes
+ * inc ebx; mov rax,&updates; mov [rax+4],ebx; cmp ebx,[rax]; setge al; or al,r13b; nop (the loop
+ * then sets r13b from al), and the loop test (remaining time >= step) becomes "until r13b". */
+static void patch_updates(unsigned char *image) {
+    static const unsigned char stop[24]={0xc5,0xf8,0x2e,0x45,0x94,0x0f,0x97,0xc1,0xff,0xc3,0x85,0xdb,
+        0x0f,0x9f,0xc2,0xb0,0x01,0x08,0xca,0x75,0x03,0x44,0x88,0xe8};
+    static const unsigned char loop[11]={0x45,0x30,0xff,0xc5,0xf8,0x2e,0xc1,0xc5,0xf8,0x28,0xc8};
+    unsigned char *at=image+build->update_stop, *l=image+build->update_loop;
+    if (memcmp(at,stop,24) || at[24]!=0x41 || memcmp(l,loop,11) || l[11]!=0x0f || l[12]!=0x83) {
+        printf("Frame rate: the update loop is not where eboot %s has it; below the frame rate the game slows down\n",build->version);
+        return;
+    }
+    const uint64_t slot=(uint64_t)(uintptr_t)&updates;
+    unsigned char *t=at;
+    *t++=0xff; *t++=0xc3;                                   /* inc ebx */
+    *t++=0x48; *t++=0xb8; memcpy(t,&slot,8); t+=8;          /* mov rax,&updates */
+    *t++=0x89; *t++=0x58; *t++=0x04;                        /* mov [rax+4],ebx */
+    *t++=0x3b; *t++=0x18;                                   /* cmp ebx,[rax] */
+    *t++=0x0f; *t++=0x9d; *t++=0xc0;                        /* setge al */
+    *t++=0x44; *t++=0x08; *t++=0xe8;                        /* or al,r13b */
+    *t++=0x90;                                              /* nop */
+    static const unsigned char until[11]={0x45,0x30,0xff, 0xc5,0xf8,0x28,0xc8, /* xor r15b,r15b; vmovaps xmm1,xmm0 */
+        0x41,0xf6,0xc5,0x01};                                                 /* test r13b,1 */
+    memcpy(l,until,11);
+    l[12]=0x84;                                             /* jae loop -> je loop */
+    updates_patched=1;
+}
+
 void runtime_game_patch(unsigned char *image, unsigned char *patches) {
     if (!build) { puts("Screens: an eboot.bin the runner does not know; skip_intro is off"); return; }
     if (memcmp(image+build->screen_push,screen_prologue,6) || memcmp(image+build->screen_pop,screen_prologue,6)) {
@@ -402,6 +445,7 @@ void runtime_game_patch(unsigned char *image, unsigned char *patches) {
     }
     unsigned char *t=hook_entry(image,build->screen_pop,hook_entry(image,build->screen_push,patches+0x100));
     t=patch_logic(image,t);
+    patch_updates(image);
     patch_render_size(image,t);
     if (cameras_found(image)) patch_view_rect(image,patch_camera(image,t+64));
 }
@@ -421,9 +465,8 @@ const char *runtime_game_screen(void) {
 }
 
 /* settings.ini frame_rate onto the engine's frame clock. The main loop (01.03 0xcafe70) measures
- * the real time since the last frame and runs the game's update in fixed steps of the clock's
- * 1/fps (0xcaf980, at most 8 a frame), waiting out the rest of a step: the game sets 30 at boot,
- * so it ran at 30 whatever the vblank. Its speed is real time at any rate. The clock is a global
+ * the real time since the last frame and runs one update a frame (0xcaf980) of the clock's step:
+ * the game sets 30 at boot, so it ran at 30 whatever the vblank (patch_updates). The clock is a global
  * object (01.03 +0x1bf6958, 01.00 +0x1bf26f8); set_fps(float) is vtable slot 3 (target at +8,
  * step at +0xc; it also sets the display rate at +0x10/+0x14). Applied at each flip, which also
  * restores the rate after the game resets it. Before the first change the clock is checked: a
@@ -457,17 +500,43 @@ static void apply_frame_rate(void) {
     printf("Frame rate: %d FPS (settings.ini frame_rate)\n",rate);
 }
 
-/* At each flip, on the game's thread: the frame rate, and screen changes (logged, and told to
- * skip_intro in runtime_pad.c). */
+/* The updates the next frame runs (patch_updates): as many steps of 1/fps as the real time since
+ * the last flip holds, at least 1 and at most fps/30 (down to 30 FPS the game keeps real time;
+ * below, it slows, as on the PS4). `owed` carries what is left, and what one update gave a quick
+ * frame (flips jitter around 1/fps), so on time it is one update a frame, as before. Also picks
+ * which of them tick the item scripts, 30 a second (patch_logic). */
+static void update_count(void) {
+    static uint64_t last;
+    static double owed, ticks;
+    struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
+    const uint64_t ns=(uint64_t)now.tv_sec*1000000000u+(uint64_t)now.tv_nsec;
+    const int rate=clock_state>0 ? deadnation_frame_rate() : 30;
+    const double step=1.0/rate;
+    const int most=rate/30>1 ? rate/30 : 1;
+    if (last) owed+=(double)(ns-last)*1e-9;
+    last=ns;
+    int n=(int)(owed/step+0.01);
+    n=n<1 ? 1 : n>most ? most : n;
+    owed-=n*step;
+    if (owed>step) owed=step; /* more than fps/30 updates owed: dropped, as the PS4 drops it */
+    if (owed<-step) owed=-step;
+    if (!updates_patched) n=1;
+    uint32_t mask=0;
+    for (int i=0;i<n;++i) {
+        ticks+=rate>30 ? 30.0/rate : 1.0;
+        if (ticks>=0.999) { mask|=1u<<i; ticks-=1.0; }
+    }
+    tick_mask=mask;
+    logic_tick=mask&1;
+    updates.wanted=n;
+    updates.done=0;
+}
+
+/* At each flip, on the game's thread: the frame rate, the next frame's updates, and screen
+ * changes (logged, and told to skip_intro in runtime_pad.c). */
 void runtime_game_frame_rate(void) {
     apply_frame_rate();
-    if (logic_patched) { /* the next frame's item script tick: 30 a second (see patch_logic) */
-        static double ticks;
-        const int rate=clock_state>0 ? deadnation_frame_rate() : 30;
-        ticks+=rate>30 ? 30.0/rate : 1.0;
-        logic_tick=ticks>=0.999;
-        if (logic_tick) ticks-=1.0;
-    }
+    update_count();
     static const char *last;
     const char *screen=runtime_game_screen();
     if (screen && screen!=last) {
