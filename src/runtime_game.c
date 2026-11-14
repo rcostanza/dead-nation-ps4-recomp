@@ -17,12 +17,15 @@
 typedef struct {
     const char *sha256, *version;
     uint32_t screen_push, screen_pop, clock, code_end, data, data_end, render_size, persp_call, ortho_call, finalize, view_rect, ortho_aspect, view_fov;
+    uint32_t item_call, item_runner; /* the items' script runner and its call (patch_logic) */
 } Build;
 static const Build known_builds[]={
     {"09b367a222cfb6308811650ae1fb8105ea6c7726137646907b211419027aa37c","01.03",
-     0xe21940,0xe21150,0x1bf6958,0x13b4920,0x13b8000,0x1bf6ef0,0xc88010,0xce352a,0xce3658,0xce2cf0,0xcebbd1,0xceb3db,0xddadd7},
+     0xe21940,0xe21150,0x1bf6958,0x13b4920,0x13b8000,0x1bf6ef0,0xc88010,0xce352a,0xce3658,0xce2cf0,0xcebbd1,0xceb3db,0xddadd7,
+     0xdf04d8,0xdf38f0},
     {"8d2ae241ca42585d0b2601554720f198a7ef63c0b6f80fc34325883530ab8135","01.00",
-     0xe1f600,0xe1f4b0,0x1bf26f8,0x13b2418,0x13b4000,0x1bf2c90,0xc866d0,0xce17aa,0xce18d8,0xce0f70,0xce9e51,0xce965b,0xdd9837},
+     0xe1f600,0xe1f4b0,0x1bf26f8,0x13b2418,0x13b4000,0x1bf2c90,0xc866d0,0xce17aa,0xce18d8,0xce0f70,0xce9e51,0xce965b,0xdd9837,
+     0xdeeca8,0xdf20c0},
 };
 static const Build *build;
 static unsigned char *game_image;
@@ -257,6 +260,139 @@ static unsigned char *patch_view_rect(unsigned char *image, unsigned char *stub)
     return t;
 }
 
+/* Weapons and items run Lua scripts that count update ticks, not seconds: the SMG adds 1 to a
+ * counter each tick and fires at 4, the rifle waits 16 ticks between shots. The game ran them at
+ * its 30 FPS, one tick a frame, so at 120 FPS weapons fired four times as fast. They keep 30
+ * ticks a second at any frame rate. The items' job runs every frame (it also moves state between
+ * the world's double buffers and builds what is drawn); per item it calls a runner that
+ * evaluates the item's script (01.03 0xdf38f0 at 0xdf04d8, 01.00 0xdf20c0 at 0xdeeca8) with the
+ * frame's time in xmm0 and at [rdx], the item's context. A stub asks `item_events` first: on
+ * frames without a tick the call is skipped, and on a tick the runner gets 1/30 s. `logic_tick`
+ * is set at each flip (one world update a frame). The characters' and directors' runners are
+ * left alone.
+ * Events last one frame, so a tick sees those of the frames since the last one. A script's event
+ * test (01.03 0xdf0190) looks in two places: the events sent to the item, gathered into its
+ * context each frame (0xdf3400, after the job zeroes their count at 0xdeb356: an "action" from the
+ * player's R2), then the frame's area events, those raised within reach of the item (a switch's
+ * "door-open" to its gate). Some are sent once (an "action"), some every frame while a button is
+ * down (a weapon's "fire", which shoots on a new press), so a tick sees an event that came on any
+ * frame since the last tick, except one the last tick saw that was missing on a frame since: that
+ * tick sees it released and the next one sees it again if it came back (a turbo button's presses
+ * and releases, at most 15 of each a second). At 30 FPS every frame is a tick and nothing changes. */
+static volatile unsigned char logic_tick=1;
+static int logic_patched;
+enum { item_slots=8192, item_event_max=19, item_tracked=24 };
+typedef struct {
+    uint32_t hash; float value, carried;
+    uint8_t here, seen, gap, again, last, carry; /* this frame; since the last tick: came, was missing,
+                                                     came after missing; the last tick had it; the next
+                                                     tick gets it (came back after a release) */
+} ItemTrack;
+typedef struct { int32_t script, count; ItemTrack events[item_tracked]; } ItemTracks;
+static ItemTracks item_tracks[item_slots];
+
+/* The tracked event `hash` of an item, added when missing (NULL when the list is full). */
+static ItemTrack *track_event(ItemTracks *t, uint32_t hash) {
+    for (int32_t k=0;k<t->count;++k) if (t->events[k].hash==hash) return &t->events[k];
+    if (t->count==item_tracked) return NULL;
+    ItemTrack *e=&t->events[t->count++];
+    memset(e,0,sizeof(*e));
+    e->hash=hash;
+    return e;
+}
+
+/* Before an item's runner, on the item job's thread: 1 to run it. The context holds the frame's
+ * time at +0, the item's slot at +0xc, its record at +0x18 (script id at +0x34, position at
+ * +0x250), the area events at +0x60 (32 bytes each: hash +4, value +8, reach +0xc, position
+ * +0x10) and their count at +0x68, the count of events sent to it at +0x8c and those events
+ * (hash, value) at +0x94. On a tick the events sent are rewritten to those the tick sees (the
+ * values of an event's frames add up, as the gather adds an event sent twice); area events the
+ * tick frame has stay where the test finds them. */
+static int ABI item_events(unsigned char *ctx) {
+    const int32_t slot=*(int32_t *)(ctx+0xc);
+    const unsigned char *record=*(unsigned char **)(ctx+0x18);
+    int32_t *count=(int32_t *)(ctx+0x8c);
+    if (slot<0 || slot>=item_slots || *count<0 || *count>item_event_max) return 1; /* runs each frame */
+    const int32_t script=*(int32_t *)(record+0x34);
+    uint32_t *events=(uint32_t *)(ctx+0x94); /* hash, value (float bits) */
+    ItemTracks *t=&item_tracks[slot];
+    if (t->script!=script) { t->script=script; t->count=0; }
+    for (int32_t k=0;k<t->count;++k) t->events[k].here=0;
+    for (int32_t i=0;i<*count;++i) {
+        ItemTrack *e=track_event(t,events[2*i]);
+        if (e) { float v; memcpy(&v,&events[2*i+1],4); e->value+=v; e->here=1; }
+    }
+    const int32_t areas=*(int32_t *)(ctx+0x68);
+    const unsigned char *area=*(unsigned char **)(ctx+0x60);
+    const float *at=(const float *)(record+0x250);
+    for (int32_t i=0;i<areas && area;++i,area+=32) {
+        const float *p=(const float *)(area+0x10), dx=at[0]-p[0], dy=at[1]-p[1], dz=at[2]-p[2];
+        float reach, value; uint32_t hash;
+        memcpy(&hash,area+4,4); memcpy(&value,area+8,4); memcpy(&reach,area+0xc,4);
+        if (reach<sqrtf(dx*dx+dy*dy+dz*dz)) continue;
+        ItemTrack *e=track_event(t,hash);
+        if (e && !e->here) { if (!e->seen) e->value=value; e->here=1; }
+    }
+    for (int32_t k=0;k<t->count;++k) {
+        ItemTrack *e=&t->events[k];
+        if (e->here) { if (e->gap && e->last) e->again=1; e->seen=1; }
+        else e->gap=1;
+    }
+    if (!logic_tick) return 0;
+    int32_t n=0, kept=0;
+    for (int32_t k=0;k<t->count;++k) {
+        ItemTrack e=t->events[k];
+        const int released=e.last && e.gap && !e.carry;
+        const int sees=e.carry || (e.seen && !released);
+        if (sees && n<item_event_max) {
+            const float v=e.carry ? e.carried : e.value;
+            events[2*n]=e.hash; memcpy(&events[2*n+1],&v,4); ++n;
+        }
+        e.carry=released && e.again; e.carried=e.value; e.last=(uint8_t)sees;
+        e.value=0; e.seen=e.gap=e.again=0;
+        if (e.last || e.carry) t->events[kept++]=e;
+    }
+    t->count=kept;
+    *count=n;
+    return 1;
+}
+
+static unsigned char *patch_logic(unsigned char *image, unsigned char *stub) {
+    unsigned char *at=image+build->item_call;
+    int32_t rel; memcpy(&rel,at+1,4);
+    if (at[0]!=0xe8 || build->item_call+5+rel!=build->item_runner) {
+        printf("Scripts: the items' script runner is not where eboot %s has it; weapons run once a frame\n",build->version);
+        return stub;
+    }
+    const float tick_dt=1.0f/30;
+    const uint64_t fn=(uint64_t)(uintptr_t)item_events;
+    unsigned char *t=stub;
+    static const unsigned char save[]={0x57,0x56,0x52,0x51,0x41,0x50,0x41,0x51, /* push rdi,rsi,rdx,rcx,r8,r9 */
+        0x48,0x83,0xec,0x08, 0x48,0x89,0xd7};                                  /* sub rsp,8; mov rdi,rdx */
+    memcpy(t,save,sizeof(save)); t+=sizeof(save);
+    *t++=0x48; *t++=0xb8; memcpy(t,&fn,8); t+=8;            /* mov rax,item_events */
+    *t++=0xff; *t++=0xd0;                                   /* call rax */
+    static const unsigned char restore[]={0x48,0x83,0xc4,0x08, 0x41,0x59,0x41,0x58,0x59,0x5a,0x5e,0x5f, /* add rsp,8; pop */
+        0x85,0xc0, 0x74,31};                                                    /* test eax,eax; je skip */
+    memcpy(t,restore,sizeof(restore)); t+=sizeof(restore);
+    *t++=0x52;                                              /* push rdx */
+    *t++=0xff; *t++=0x32;                                   /* push qword [rdx]: the frame's time */
+    *t++=0x48; *t++=0x83; *t++=0xec; *t++=0x08;             /* sub rsp,8 */
+    *t++=0xc7; *t++=0x02; memcpy(t,&tick_dt,4); t+=4;       /* mov dword [rdx],1/30 */
+    *t++=0xc5; *t++=0xfa; *t++=0x10; *t++=0x02;             /* vmovss xmm0,[rdx] */
+    rel=(int32_t)((image+build->item_runner)-(t+5));
+    *t++=0xe8; memcpy(t,&rel,4); t+=4;                      /* call runner */
+    *t++=0x48; *t++=0x83; *t++=0xc4; *t++=0x08;             /* add rsp,8 */
+    *t++=0x59; *t++=0x5a;                                   /* pop rcx; pop rdx */
+    *t++=0x89; *t++=0x0a;                                   /* mov [rdx],ecx */
+    *t++=0xc3;                                              /* ret */
+    *t++=0xc3;                                              /* skip: ret */
+    const int32_t to=(int32_t)(stub-(at+5));
+    at[0]=0xe8; memcpy(at+1,&to,4);                         /* call stub */
+    logic_patched=1;
+    return t;
+}
+
 void runtime_game_patch(unsigned char *image, unsigned char *patches) {
     if (!build) { puts("Screens: an eboot.bin the runner does not know; skip_intro is off"); return; }
     if (memcmp(image+build->screen_push,screen_prologue,6) || memcmp(image+build->screen_pop,screen_prologue,6)) {
@@ -265,6 +401,7 @@ void runtime_game_patch(unsigned char *image, unsigned char *patches) {
         return;
     }
     unsigned char *t=hook_entry(image,build->screen_pop,hook_entry(image,build->screen_push,patches+0x100));
+    t=patch_logic(image,t);
     patch_render_size(image,t);
     if (cameras_found(image)) patch_view_rect(image,patch_camera(image,t+64));
 }
@@ -324,6 +461,13 @@ static void apply_frame_rate(void) {
  * skip_intro in runtime_pad.c). */
 void runtime_game_frame_rate(void) {
     apply_frame_rate();
+    if (logic_patched) { /* the next frame's item script tick: 30 a second (see patch_logic) */
+        static double ticks;
+        const int rate=clock_state>0 ? deadnation_frame_rate() : 30;
+        ticks+=rate>30 ? 30.0/rate : 1.0;
+        logic_tick=ticks>=0.999;
+        if (logic_tick) ticks-=1.0;
+    }
     static const char *last;
     const char *screen=runtime_game_screen();
     if (screen && screen!=last) {

@@ -51,6 +51,20 @@ them skip without them.
     +0xa8/+0xb0, top screen's vtable[2] is its name. Logged as `Screen: <name>`.
   - frame clock (01.03 +0x1bf6958): set_fps is vtable slot 3, target at +8, step at +0xc. The game
     sets 30 at boot; game speed is real time at any rate (fixed-step accumulator).
+  - item script ticks (`patch_logic`): the Lua scripts count update ticks, not seconds (weapon fire
+    rate, cooldowns), so the items' (weapons') scripts stay at the PS4's 30 a second at any frame
+    rate: the per-item runner call in the item job (01.03 0xdf04d8 to 0xdf38f0) is skipped on frames
+    without a tick, and gets 1/30 s on a tick (`logic_tick`, decided at each flip). Item events last
+    one frame, so `item_events` tracks what the frames since the last tick brought: the events sent
+    to the item (context +0x8c/+0x94, zeroed per item at 0xdeb356; R2's "action") and the area
+    events in its reach (context +0x60/+0x68, a switch's "door-open"); the event test 0xdf0190 reads
+    both. A tick sees an event from any of those frames, except one the last tick saw that went
+    missing since (a held button's per-frame "fire"): it sees it released, and the next tick sees
+    it again if it came back, so turbo presses are not merged into one hold. Do not gate the jobs themselves (double-buffer flicker) or the characters'/directors'
+    runners (0xdc9240 at 0x4972f8, 0xdc6340 at 0xdc4c01) without the same care: skipping them as is
+    loses their events and the player cannot fire. So player/zombie/director scripts (burn and acid
+    ticks, spawn pacing) still run once a frame. Check changes in Arcade (Solo Game > Arcade): R2 at
+    the UPGRADES terminal (Screen_Weapon_Config) and at the green panel left of the round gate.
   - render size (01.03 0xc88010, in the render device ctor): patched for 720p/1440p/4k (`deadnation_render_width/height`) and for
     21:9/32:9 (wider, same lines) and 4:3/16:10 (taller, 16:9's width). Taller also needs the
     cameras (`patch_camera`: 16:9 shape for the render-size ortho cameras, the projection's y term
@@ -64,6 +78,10 @@ them skip without them.
   src/runtime_pad.c): until Screen_Main_Menu first shows, movies end after their first frame
   (`runtime_pad_intro_movie`, AvPlayer), Cross is tapped on Screen_Startup_Splash,
   Screen_Brightness_Calibration and Screen_SCEPresents, Options on Screen_Menu_Title.
+- Movies: the game's movie update (01.03 0x43b900) spins until sceAvPlayerGetVideoData gives a frame,
+  once per update step, so above 30 FPS the AvPlayer hands the frame showing again until the next is
+  due (`avplayer_source.cpp`); else the title movie behind the main menu (back after quitting a game)
+  holds the game to 30 updates a second, in slow motion.
 - No HDR and no PS4 Pro mode: the game never imports sceVideoOutGetDeviceCapabilityInfo or
   sceKernelIsNeoMode (`deadnation_hdr` returns 0); 4K is the runner's render-size patch.
 - The overlay's pages (Display Settings, exit prompt: F4 or Select+Start) follow the game's menus: near-black backdrop

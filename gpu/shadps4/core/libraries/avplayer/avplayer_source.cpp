@@ -22,6 +22,7 @@ extern "C" {
 }
 
 #include "common/support/avdec.h"
+#include "deadnation_settings.h"
 
 extern "C" int runtime_file_translate(const char* guest, char* out, size_t size);
 
@@ -372,15 +373,27 @@ bool AvPlayerSource::GetVideoData(AvPlayerFrameInfoEx& video_info) {
         return false;
     }
 
+    // deadnation: the game's movie update (01.03 0x43b900) spins until it gets a frame, once per
+    // update step: the PS4's 30 updates a second met a 30 FPS movie's frames, faster rates would
+    // wait for each (the title movie behind the main menu, back after quitting a game, slowed the
+    // game to the movie's rate). Above 30 FPS the frame showing is handed again until the next
+    // one is due.
+    const bool repeat = m_current_video_frame.has_value() && DeadNationSettings::EffectiveFrameRate() > 30;
     if (m_video_frames.Size() == 0) {
-        return false;
+        if (repeat) {
+            video_info = m_current_video_frame->info;
+        }
+        return repeat;
     }
 
     const auto current_time = CurrentTime();
     const auto& new_frame = m_video_frames.Front();
     if (m_state.GetSyncMode() == AvPlayerAvSyncMode::Default) {
         if (new_frame.info.timestamp > current_time) {
-            return false;
+            if (repeat) {
+                video_info = m_current_video_frame->info;
+            }
+            return repeat;
         }
     }
 

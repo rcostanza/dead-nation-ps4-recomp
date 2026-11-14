@@ -5,6 +5,11 @@ Each release's section becomes the text of its GitHub release (`tools/release_no
 tagging: a tag without one does not publish. Keep each entry on one line: GitHub shows a line break
 in release text as a break.
 
+## v0.2
+
+- Retuned game speed logic according to the FPS cap; rate of fire should now be consistent regardless
+- Quitting to the main menu no longer drops the game to 30 FPS in slow motion
+
 ## v0.1
 
 - First release
