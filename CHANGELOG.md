@@ -11,6 +11,7 @@ in release text as a break.
 - Quitting to the main menu no longer drops the game to 30 FPS in slow motion
 - Added 360 FPS cap option. Note: you might need to reduce rendering resolution to achieve that, it's a taxing game
 - The game no longer slows down when your PC can't keep up with the FPS cap (down to 30 FPS)
+- Borderless window is now a real window: alt-tab no longer makes the screen flash or switch modes
 
 ## v0.1
 
