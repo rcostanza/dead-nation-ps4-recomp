@@ -61,8 +61,11 @@ grep -q 'usage: deadnation-setup' "$work/unset.log" || { cat "$work/unset.log"; 
 [[ $status != 0 ]] || fail "deadnation without paths.ini (and no display for the setup) exited 0"
 
 # A folder that is not a dump, then one that has the files the setup looks for (empty, so the
-# preparation itself fails, in python3).
+# preparation itself fails, in python3). The setup checks the update folder first, so it gets its
+# files before the game folder is tried.
 mkdir -p "$work/empty" "$work/dump/sce_sys" "$work/dump/sce_module" "$work/update/sce_sys"
+: >"$work/update/eboot.bin"
+: >"$work/update/sce_sys/param.sfo"
 status=0
 ./deadnation-setup --game "$work/empty" --update "$work/update" --save "$work/save" >"$work/setup-empty.log" 2>&1 || status=$?
 grep -q "isn't a decrypted Dead Nation dump" "$work/setup-empty.log" ||
@@ -70,8 +73,6 @@ grep -q "isn't a decrypted Dead Nation dump" "$work/setup-empty.log" ||
 for f in eboot.bin sce_sys/param.sfo sce_module/libc.prx sce_module/libSceFios2.prx audio.pck stream.dat; do
     : >"$work/dump/$f"
 done
-: >"$work/update/eboot.bin"
-: >"$work/update/sce_sys/param.sfo"
 status=0
 ./deadnation-setup --game "$work/dump" --update "$work/update" --save "$work/save" >"$work/setup-version.log" 2>&1 || status=$?
 grep -q "aren't the ones this release runs" "$work/setup-version.log" ||
