@@ -498,6 +498,24 @@ static void apply_frame_rate(void) {
     printf("Frame rate: %d FPS (settings.ini frame_rate)\n",rate);
 }
 
+/* Game speed check, at each flip: `dt` the real time since the last flip, `ran` the game time the
+ * frame's updates covered (updates run times their step). Over windows of 2 s, logs the game's
+ * speed against real time, the average FPS and the cap, only when it is off by more than 5% (at
+ * 30 FPS and up, patch_updates keeps it at 100%). Frames over 100 ms (loading, a stall the PS4
+ * drops too) are left out of both sums, so loads do not show as slowdowns. */
+static void speed_check(double dt, double ran, int rate) {
+    static double real, game;
+    static int frames;
+    if (dt>0.1) return;
+    real+=dt; game+=ran; ++frames;
+    if (real<2.0) return;
+    const double speed=game/real;
+    if (speed<0.95 || speed>1.05)
+        printf("Speed: game at %.0f%% of real time (average %.1f FPS, cap %d FPS)\n",
+               speed*100.0,frames/real,rate);
+    real=game=0.0; frames=0;
+}
+
 /* The updates the next frame runs (patch_updates): as many steps of 1/fps as the real time since
  * the last flip holds, at least 1 and at most fps/30 (down to 30 FPS the game keeps real time;
  * below, it slows, as on the PS4). `owed` carries what is left, and what one update gave a quick
@@ -505,13 +523,18 @@ static void apply_frame_rate(void) {
  * which of them tick the item scripts, 30 a second (patch_logic). */
 static void update_count(void) {
     static uint64_t last;
-    static double owed, ticks;
+    static double owed, ticks, last_step;
     struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
     const uint64_t ns=(uint64_t)now.tv_sec*1000000000u+(uint64_t)now.tv_nsec;
     const int rate=clock_state>0 ? deadnation_frame_rate() : 30;
     const double step=1.0/rate;
     const int most=rate/30>1 ? rate/30 : 1;
-    if (last) owed+=(double)(ns-last)*1e-9;
+    if (last) {
+        const int ran=updates_patched ? updates.done : 1; /* unpatched, the loop runs one a frame */
+        owed+=(double)(ns-last)*1e-9;
+        speed_check((double)(ns-last)*1e-9,ran*last_step,rate);
+    }
+    last_step=step;
     last=ns;
     int n=(int)(owed/step+0.01);
     n=n<1 ? 1 : n>most ? most : n;
