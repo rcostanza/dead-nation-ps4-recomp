@@ -10,6 +10,7 @@ in release text as a break.
 - No need to run the setup again after updating: the game prepares itself on its first start
 - Starting the game before it's set up (or after its folders moved) opens the setup
 - The 1.03 update is now required, and the setup refuses game files other than the CUSA00236 dump with its 1.03 update
+- Local co-op: connect a second controller to play as player 2
 
 ## v0.2
 
