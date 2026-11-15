@@ -3,8 +3,10 @@
 #define DEADNATION_LAUNCH_H
 
 /* deadnation started with no boot file (no arguments, or only options): reads paths.ini next to
- * the exe (deadnation-setup writes it), checks game/ was prepared for this release (release.txt)
- * and replaces *argc and *argv with
+ * the exe (deadnation-setup writes it; when it is missing or names a folder that is gone, the setup
+ * is started instead and this process ends), checks game/ was prepared for this release and these
+ * eboot.bin files (src/prepared_stamp.h; else runs deadnation-setup --patch and waits for it) and
+ * replaces *argc and *argv with
  * <exe> game/boot-linked.bin --content-profile game/content.bin --app0 <game> --user <save>
  * --timeout 0 [--isa-rewrite game/isa-rewrite.bin] and then the options given. Started without a
  * console or terminal (Explorer, a file manager, a shortcut), output goes to

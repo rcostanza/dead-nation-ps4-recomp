@@ -5,13 +5,13 @@
   "repo": "rcostanza/dead-nation-ps4-recomp",
   "game": {
     "kind": "folder",
-    "label": "The decrypted dump of your own PS4 copy (CUSA00236): the folder with eboot.bin, sce_module, sce_sys and stream.dat.",
+    "label": "The decrypted dump of your own PS4 copy (CUSA00236, version 1.00): the folder with eboot.bin, sce_module, sce_sys and stream.dat.",
     "check": { "file": "stream.dat" },
     "update": {
       "into": "update",
-      "label": "Optionally, the decrypted 1.03 update (a folder with eboot.bin and sce_sys, e.g. CUSA00236-patch). The game also plays without it.",
+      "label": "The decrypted 1.03 update (a folder with eboot.bin and sce_sys, e.g. CUSA00236-patch). Required: other versions are refused.",
       "accepts": "folder",
-      "optional": true
+      "optional": false
     }
   },
   "start": {

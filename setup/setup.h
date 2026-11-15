@@ -25,7 +25,7 @@ struct Options {
     std::filesystem::path save; // saves and the launch log (run.py's --user)
     std::optional<std::filesystem::path> copy_saves_from; // the old save folder, whose saves go to `save`
     std::optional<bool> skip_intro; // settings.ini skip_intro to write; unset keeps what is there
-    std::filesystem::path update; // optional: the decrypted update (patch) served over the dump; empty for none
+    std::filesystem::path update; // the decrypted 1.03 update (patch) served over the dump; required
     bool update_in_release = false; // --prepare: the update may be root/update (RecompLauncher puts it there)
 };
 
@@ -65,10 +65,10 @@ std::filesystem::path game_folder(const std::filesystem::path& path);
 std::vector<std::wstring> missing_game_files(const std::filesystem::path& game);
 // True when `update` is a decrypted update folder (eboot.bin and sce_sys/param.sfo).
 bool is_update_folder(const std::filesystem::path& update);
-// Why the game this dump and update (empty for none) would play isn't the one the release was tested
-// with (CUSA00236 1.00 dump with the 1.03 update, compared by eboot.bin's sha256); empty when it is.
-// Meant for the user, who may go on anyway.
-std::wstring version_warning(const std::filesystem::path& game, const std::filesystem::path& update);
+// Why this dump and update (empty for none) aren't exactly the ones the release runs (the CUSA00236
+// 1.00 dump with its 1.03 update, compared by eboot.bin's sha256); empty when they are. install()
+// refuses them. Meant for the user.
+std::wstring version_error(const std::filesystem::path& game, const std::filesystem::path& update);
 // What `root`/paths.ini names, if it names both folders.
 std::optional<Paths> read_paths(const std::filesystem::path& root);
 // read_paths(root): the folders to start from. Nothing is kept outside the release folder.
@@ -76,8 +76,9 @@ std::optional<Paths> remembered_paths(const std::filesystem::path& root);
 // save/ in the release folder: a release is never zipped with one, so unpacking a newer release over
 // the folder keeps the saves.
 std::filesystem::path default_save();
-// True when `root` is set up for its release: paths.ini names both folders and game/ was prepared
-// for this release.txt (what src/launcher.c checks before it starts the game).
+// True when `root` is set up for its release: paths.ini names the folders and game/ was prepared
+// for this release.txt and these eboot.bin files (src/prepared_stamp.h; what src/launcher.c checks
+// before it starts the game).
 bool ready(const std::filesystem::path& root);
 // True when `save` holds game saves (a savedata folder with something in it).
 bool has_saves(const std::filesystem::path& save);

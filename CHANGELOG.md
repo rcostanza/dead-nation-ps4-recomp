@@ -5,6 +5,12 @@ Each release's section becomes the text of its GitHub release (`tools/release_no
 tagging: a tag without one does not publish. Keep each entry on one line: GitHub shows a line break
 in release text as a break.
 
+## v0.3
+
+- No need to run the setup again after updating: the game prepares itself on its first start
+- Starting the game before it's set up (or after its folders moved) opens the setup
+- The 1.03 update is now required, and the setup refuses game files other than the CUSA00236 dump with its 1.03 update
+
 ## v0.2
 
 - Retuned game speed logic according to the FPS cap; rate of fire should now be consistent regardless

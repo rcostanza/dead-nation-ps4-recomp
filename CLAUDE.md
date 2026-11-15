@@ -99,7 +99,15 @@ them skip without them.
   A new display option goes in the overlay's rows and settings.exe's both, and in `recomplauncher.json`'s
   `settings` (RecompLauncher; shipped at the release's top by `tools/package.py`, schema at
   recomplauncher.com/schema/recomplauncher.json). Its Easy Setup runs `deadnation-setup --prepare`
-  (progress lines, the update from `update/` in the release folder when the player added one).
+  (progress lines, the update from `update/` in the release folder).
+- Starting deadnation with no boot file (`src/launcher.c`): no paths.ini, or its game/update folder
+  without eboot.bin, starts deadnation-setup (window or terminal questions) and exits; game/ not
+  stamped for this release and these eboot.bin files (`game/release.txt`, `src/prepared_stamp.h`:
+  release line plus size and write time of both eboots, shared by launcher and setup) runs
+  `deadnation-setup --patch` (progress window, prepares from paths.ini's folders) and waits. The
+  update is required, and `install()` refuses anything but the CUSA00236 1.00 dump with the 1.03
+  update (`version_error`, eboot sha256); `DEADNATION_SETUP_ANY_VERSION` skips that for the release
+  smoke test's stand-in files only.
 - deadnation-setup.exe's window (`setup/main.cpp`, Win32 GDI) draws the same look by hand: the `Srgb`
   palette copied into its `color` namespace, Roboto Condensed embedded as RCDATA in `setup/setup.rc`
   (`AddFontMemResourceEx`). Keep its colours in step with `deadnation_page.h`. The Linux setup has no

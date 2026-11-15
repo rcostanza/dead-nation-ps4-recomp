@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "setup.h"
 
+#include "../src/prepared_stamp.h"
+
 #ifdef _WIN32
 #include <windows.h>
 #include <shlobj.h>
@@ -291,12 +293,12 @@ void write_paths(const fs::path& ini, const fs::path& game, const fs::path& save
     write_text(ini, "; Written by " + setup + ". Run it again to change these folders." + nl +
                     "; game: your dump (eboot.bin, sce_module, sce_sys, stream.dat). It is only ever read." + nl +
                     "; save: your saves, and deadnation.log in its log folder." + nl +
-                    "; update: optional, the decrypted update (patch); its files replace the dump's." + nl +
+                    "; update: the decrypted 1.03 update (patch); its files replace the dump's." + nl +
                     "; Shader caches are kept in shaders/ next to the game (cache=<folder> moves them)." + nl +
                     "[paths]" + nl +
                     "game=" + narrow(text(game)) + nl +
                     "save=" + narrow(text(save)) + nl +
-                    (update.empty() ? std::string() : "update=" + narrow(text(update)) + nl));
+                    "update=" + narrow(text(update)) + nl);
 }
 
 // The key of a settings.ini line ("key=value", gpu/shim/deadnation_settings.cpp), lower case; empty
@@ -609,30 +611,39 @@ std::wstring version_text(std::string v) {
 
 } // namespace
 
-std::wstring version_warning(const fs::path& game, const fs::path& update) {
+std::wstring version_error(const fs::path& game, const fs::path& update) {
+#ifdef _WIN32
+    if (_wgetenv(L"DEADNATION_SETUP_ANY_VERSION")) // the release smoke test's stand-in files only
+#else
+    if (std::getenv("DEADNATION_SETUP_ANY_VERSION"))
+#endif
+        return {};
     fs::path dump = game_folder(game);
     std::vector<std::wstring> notes;
     std::string title = sfo_value(dump / L"sce_sys" / L"param.sfo", "TITLE_ID");
-    if (!title.empty() && title != kTestedTitle)
-        notes.push_back(L"Your dump is " + widen(title) + L", but this release was tested with " +
-                        widen(kTestedTitle) + L" (other regions may differ).");
-    else if (update.empty() && sha256_file(dump / L"eboot.bin") != kTestedDumpSha) // with an update, the dump's eboot.bin isn't run
+    if (title != kTestedTitle)
+        notes.push_back(L"Your dump is " + (title.empty() ? std::wstring(L"not a readable PS4 title") : widen(title)) +
+                        L", not " + widen(kTestedTitle) + L".");
+    else if (sha256_file(dump / L"eboot.bin") != kTestedDumpSha)
         notes.push_back(L"Your dump's eboot.bin (version " +
                         version_text(sfo_value(dump / L"sce_sys" / L"param.sfo", "APP_VER")) +
-                        L") isn't the 1.00 one this release was tested with.");
+                        L") isn't the original 1.00 one.");
     if (update.empty())
-        notes.push_back(std::wstring(L"You haven't chosen an update folder. This release was tested with update ") +
-                        kTestedUpdateVersion + L" (e.g. " + widen(kTestedTitle) + L"-patch); without it you play the dump's own version.");
-    else if (sha256_file(update / L"eboot.bin") != kTestedUpdateSha)
-        notes.push_back(L"Your update is version " + version_text(sfo_value(update / L"sce_sys" / L"param.sfo", "APP_VER")) +
-                        L", but this release was tested with " + kTestedUpdateVersion +
-                        L" (or its eboot.bin differs from the tested one).");
+        notes.push_back(std::wstring(L"No update folder was chosen: the ") + kTestedUpdateVersion + L" update (e.g. " +
+                        widen(kTestedTitle) + L"-patch) is required.");
+    else if (sha256_file(update / L"eboot.bin") != kTestedUpdateSha) {
+        std::wstring version = version_text(sfo_value(update / L"sce_sys" / L"param.sfo", "APP_VER"));
+        notes.push_back(version == kTestedUpdateVersion
+                            ? L"Your update's eboot.bin isn't the original " + version + L" one."
+                            : L"Your update is version " + version + L", not " + kTestedUpdateVersion + L".");
+    }
     if (notes.empty())
         return {};
-    std::wstring s;
+    std::wstring s = L"These game files aren't the ones this release runs:\n\n";
     for (const std::wstring& n : notes)
         s += L"- " + n + L"\n";
-    return s + L"\nThe game may crash or misbehave with a version it wasn't tested with.";
+    return s + L"\nDead Nation needs your " + widen(kTestedTitle) + L" dump (1.00) with its " + kTestedUpdateVersion +
+           L" update, both decrypted. Run deadnation-setup and choose those folders.";
 }
 
 namespace {
@@ -689,10 +700,11 @@ fs::path default_save() {
 
 bool ready(const fs::path& root) {
     std::error_code ec;
-    fs::path stamp = root / L"game" / L"release.txt", release = root / L"release.txt";
     try {
-        return read_paths(root) && fs::is_regular_file(root / kGameExe, ec) && fs::is_regular_file(stamp, ec) &&
-               fs::is_regular_file(release, ec) && read_text(stamp) == read_text(release);
+        std::optional<Paths> paths = read_paths(root);
+        return paths && !paths->update.empty() && fs::is_regular_file(root / kGameExe, ec) &&
+               deadnation_prepared(narrow(text(root)).c_str(), narrow(text(paths->game)).c_str(),
+                                   narrow(text(paths->update)).c_str());
     } catch (const Error&) {
         return false;
     }
@@ -755,11 +767,13 @@ fs::path install(const Options& opt, const Log& log) {
         fail(L"Choose a save folder outside the game folder. Setup never writes into the game folder.");
     if (inside(root, game) || inside(game, root))
         fail(L"Keep the game folder and this folder apart (neither inside the other).");
-    if (!update.empty() && !is_update_folder(update))
+    if (update.empty())
+        fail(L"Choose the update folder: Dead Nation needs its decrypted 1.03 update (e.g. CUSA00236-patch).");
+    if (!is_update_folder(update))
         fail(L"This folder isn't a decrypted Dead Nation update (eboot.bin and sce_sys\\param.sfo):\n" + text(update) +
-             L"\n\nChoose another one, or leave it empty to play the dump's own version.");
+             L"\n\nChoose the 1.03 update's folder (e.g. CUSA00236-patch).");
     bool launcher_update = opt.update_in_release && inside(update, root / L"update");
-    if (!update.empty() && (inside(root, update) || (inside(update, root) && !launcher_update) || same_path(update, game)))
+    if ((inside(root, update) || (inside(update, root) && !launcher_update) || same_path(update, game)))
         fail(L"Keep the update folder apart from the game folder and this folder.");
 
     std::error_code ec;
@@ -770,15 +784,15 @@ fs::path install(const Options& opt, const Log& log) {
     for (const fs::path& f : {exe, prepare / L"run.py", root / L"release.txt"})
         if (!fs::is_regular_file(f, ec))
             fail(text(f) + L" is missing." + kIncomplete);
+    if (std::wstring wrong = version_error(game, update); !wrong.empty())
+        fail(wrong);
     std::vector<std::wstring> python = python_command(prepare);
 
-    log(L"Preparing the game from " + text(game) + (update.empty() ? L"" : L" with the update " + text(update)));
+    log(L"Preparing the game from " + text(game) + L" with the update " + text(update));
     fs::remove(image / L"release.txt", ec); // the image is this release's only once it is complete
     std::vector<std::wstring> command = python;
     command.insert(command.end(), {text(prepare / L"run.py"), L"prepare", L"--game", text(game),
-                                   L"--out", text(image)});
-    if (!update.empty())
-        command.insert(command.end(), {L"--update", text(update)});
+                                   L"--out", text(image), L"--update", text(update)});
 #ifdef _WIN32
     SetEnvironmentVariableW(L"PYTHONIOENCODING", L"utf-8");
 #else
@@ -805,7 +819,12 @@ fs::path install(const Options& opt, const Log& log) {
     } else {
         fs::remove(image / L"isa-rewrite.bin", ec);
     }
-    write_text(image / L"release.txt", read_text(root / L"release.txt"));
+    // The stamp the game checks at every start (src/prepared_stamp.h).
+    char stamp[DEADNATION_STAMP_CHARS];
+    if (!deadnation_prepared_stamp(narrow(text(root)).c_str(), narrow(text(game)).c_str(), narrow(text(update)).c_str(),
+                                   stamp, sizeof stamp))
+        fail(L"Cannot read " + text(root / L"release.txt") + L" or the game's eboot.bin files.");
+    write_text(image / L"release.txt", stamp);
     log(L"prepared " + text(image));
 
     fs::path settings = root / L"settings.ini";
@@ -841,8 +860,7 @@ fs::path install(const Options& opt, const Log& log) {
         }
     }
     write_paths(root / L"paths.ini", game, save, update);
-    log(L"wrote    paths.ini (game " + text(game) + L", save " + text(save) +
-        (update.empty() ? L"" : L", update " + text(update)) + L")");
+    log(L"wrote    paths.ini (game " + text(game) + L", save " + text(save) + L", update " + text(update) + L")");
     return exe;
 }
 

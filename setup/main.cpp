@@ -3,11 +3,13 @@
 // Dead Nation dump, so the game starts from deadnation.exe or a desktop shortcut.
 //
 // With no arguments it opens a window: the game folder (the dump), the update folder, the save folder, whether to skip the intro logos (settings.ini skip_intro), Install and Exit; after an
-// install it offers a desktop shortcut. Run it again to change a folder, or after unpacking a newer
-// release over the folder.
-// With arguments it installs from the command line:
+// install it offers a desktop shortcut. deadnation.exe opens it when paths.ini is missing or names a
+// folder that is gone; run it again to change a folder.
+// With --patch (deadnation.exe, when game/ isn't prepared for this release and these eboot.bin files)
+// it prepares game/ again from paths.ini's folders, with a small progress window: 0 when done.
+// With other arguments it installs from the command line:
 //
-//     deadnation-setup.exe --game <dump or eboot.bin> [--update <folder>|--no-update]
+//     deadnation-setup.exe --game <dump or eboot.bin> --update <folder>
 //                           [--save <folder>] [--copy-saves] [--skip-intro|--play-intro]
 //                           [--shortcut <folder>|desktop] [--prepare]
 
@@ -78,13 +80,12 @@ private:
 };
 
 constexpr wchar_t kUsage[] =
-    L"usage: deadnation-setup.exe --game <dump or eboot.bin> [--update <folder>|--no-update]\n"
+    L"usage: deadnation-setup.exe --game <dump or eboot.bin> --update <folder>\n"
     L"                             [--save <folder>] [--copy-saves] [--skip-intro|--play-intro]\n"
     L"                             [--shortcut <folder>|desktop] [--prepare]\n"
     L"  --game        the decrypted game dump (eboot.bin, sce_module, sce_sys, stream.dat); only ever read\n"
-    L"  --update      the decrypted update (patch, e.g. CUSA00236-patch), served over the dump; its\n"
-    L"                version is the one played (default: the one paths.ini names); --no-update plays\n"
-    L"                the dump's own version\n"
+    L"  --update      the decrypted 1.03 update (patch, e.g. CUSA00236-patch), served over the dump\n"
+    L"                (default: the one paths.ini names)\n"
     L"  --save        where your saves go (default: the one paths.ini names, else save\\ here)\n"
     L"  --copy-saves  when --save changes, copy the saves from the old save folder\n"
     L"  --skip-intro, --play-intro\n"
@@ -93,12 +94,13 @@ constexpr wchar_t kUsage[] =
     L"  --shortcut    also write the game's shortcut into this folder, or onto the Desktop\n"
     L"  --prepare     for launchers (RecompLauncher): also print \"progress <0..1> <step>\" lines; the\n"
     L"                update is only --update's folder, if it exists (it may be update\\ here)\n"
+    L"  --patch       prepare the game again from paths.ini's folders (deadnation.exe runs this)\n"
     L"Sets up the folder this exe is in. With no arguments, opens the setup window.";
 
 int run_cli(const std::vector<std::wstring>& args) {
     Console con;
     std::wstring game, save, shortcut, update;
-    bool copy_saves = false, no_update = false, prepare = false;
+    bool copy_saves = false, prepare = false;
     std::optional<bool> skip_intro;
     for (size_t i = 0; i < args.size(); ++i) {
         const std::wstring& a = args[i];
@@ -113,8 +115,6 @@ int run_cli(const std::vector<std::wstring>& args) {
             copy_saves = true;
         } else if (a == L"--skip-intro" || a == L"--play-intro") {
             skip_intro = a == L"--skip-intro";
-        } else if (a == L"--no-update") {
-            no_update = true;
         } else if (a == L"--prepare") {
             prepare = true;
         } else {
@@ -132,18 +132,15 @@ int run_cli(const std::vector<std::wstring>& args) {
         opt.game = game;
         auto old = setup::remembered_paths(opt.root);
         opt.save = !save.empty() ? fs::path(save) : old ? old->save : setup::default_save();
-        opt.update = no_update ? fs::path() : !update.empty() ? fs::path(update) : old ? old->update : fs::path();
-        // --prepare: the launcher names the update each time, and passes its folder even when the
-        // player added none.
+        opt.update = !update.empty() ? fs::path(update) : old ? old->update : fs::path();
+        // --prepare: the launcher names the update each time (the folder it put the player's in).
         if (prepare) {
-            opt.update = no_update ? fs::path() : setup::update_in(update);
+            opt.update = setup::update_in(update);
             opt.update_in_release = true;
         }
         if (copy_saves)
             opt.copy_saves_from = saves_to_move(opt.root, opt.save);
         opt.skip_intro = skip_intro;
-        if (std::wstring warning = setup::version_warning(opt.game, opt.update); !warning.empty())
-            con.err(L"Warning:\n" + warning + L"\n");
         fs::path exe = setup::install(opt, [&](const std::wstring& line) {
             con.out(line);
             if (std::wstring step = setup::progress_line(line); prepare && !step.empty())
@@ -168,8 +165,8 @@ int run_cli(const std::vector<std::wstring>& args) {
 // title in heavy white capitals at the top left, the folders as dark grey bars in a brushed silver
 // frame with the focused one on the blood red bar, white Roboto Condensed (embedded, setup.rc) with a
 // dark shadow, and the buttons on the dark strip at the bottom right. Install stays disabled until the
-// game folder holds a Dead Nation dump, the update folder (optional) holds an update when one is
-// named, and a save folder is named.
+// game folder holds a Dead Nation dump, the update folder holds an update, and a save folder is
+// named; Install itself checks they are exactly the CUSA00236 1.00 dump and 1.03 update.
 
 enum : int {
     kGameEdit = 101,
@@ -210,7 +207,7 @@ struct Folder {
 
 struct Ui {
     HWND wnd = nullptr, play = nullptr, install = nullptr, exit = nullptr, skip_intro = nullptr;
-    Folder game{L"Game folder", 86}, update{L"Update folder (optional)", 164}, save{L"Save folder", 242};
+    Folder game{L"Game folder", 86}, update{L"Update folder (1.03)", 164}, save{L"Save folder", 242};
     std::vector<HWND> inputs; // disabled while installing (Play Game too, and until the folder is set up)
     HFONT body = nullptr, label = nullptr, title = nullptr, hint = nullptr;
     HBRUSH field = nullptr;
@@ -443,8 +440,8 @@ void validate() {
         ui.game.ok = true;
         ui.game.note = L"Dead Nation dump found";
     }
-    ui.update.ok = update.empty() || setup::is_update_folder(fs::path(update));
-    ui.update.note = update.empty() ? L"Optional: the dump's own version" : ui.update.ok ? L"Update found" : L"Not an update folder";
+    ui.update.ok = !update.empty() && setup::is_update_folder(fs::path(update));
+    ui.update.note = update.empty() ? L"Required: the decrypted 1.03 update" : ui.update.ok ? L"Update found" : L"Not an update folder";
     ui.save.ok = !save.empty();
     ui.save.note = !ui.save.ok                         ? L"Required"
                    : fs::is_directory(fs::path(save), ec) ? L"Folder found"
@@ -516,11 +513,7 @@ void start_install() {
     opt.game = game;
     opt.save = save;
     opt.update = update;
-    opt.skip_intro = ui.skip;
-    // Not in validate(): hashing eboot.bin on every keystroke would be slow.
-    if (std::wstring warning = setup::version_warning(opt.game, opt.update); !warning.empty() &&
-        MessageBoxW(ui.wnd, (warning + L"\n\nInstall anyway?").c_str(), kTitle, MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK)
-        return;
+    opt.skip_intro = ui.skip; // install() checks the versions (hashing eboot.bin per keystroke would be slow)
     try {
         if (auto old = saves_to_move(opt.root, opt.save)) {
             std::wstring ask = L"Copy your saves to the new save folder?\n\nFrom: " + old->wstring() + L"\nTo: " + save;
@@ -626,7 +619,7 @@ void create_controls() {
     ui.skip = setup::skip_intro(ui.root, save);
     set_status(setup::ready(ui.root) ? L"The game is set up. Press Play Game, or change the folders and press Install."
                : paths              ? L"This version isn't set up yet. Press Install."
-                                    : L"Choose your game dump (and its update if you have it), then press Install.");
+                                    : L"Choose your game dump and its 1.03 update, then press Install.");
     set_busy(false);
 }
 
@@ -787,6 +780,145 @@ int run_window(HINSTANCE inst) {
     return 0;
 }
 
+// --- --patch ------------------------------------------------------------------------------------
+// deadnation.exe found game/ not prepared for this release or these eboot.bin files: prepare it again
+// from paths.ini's folders, in a small window of the same look (the title, the step, a red bar). The
+// files are checked first (install()); when they aren't the supported ones, a message box says so
+// and the game does not start.
+
+struct Patch {
+    double done = 0;
+    std::wstring step = L"Checking your game files";
+    int result = -1; // the exit code once install() has ended
+};
+Patch patch;
+constexpr int kPatchWidth = 520, kPatchHeight = 150;
+
+void paint_patch(HDC dc) {
+    RECT client;
+    GetClientRect(ui.wnd, &client);
+    gradient(dc, client, color::BackRed, color::BackEdge, GRADIENT_FILL_RECT_H);
+    text(dc, L"PREPARING DEAD NATION", rect(24, 8, kPatchWidth - 48, 52), ui.title, color::Text,
+         DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
+    text(dc, patch.step, rect(24, 66, kPatchWidth - 48, 26), ui.label, color::Dim, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    RECT bar = rect(24, 100, kPatchWidth - 48, 22);
+    row_bar(dc, bar);
+    RECT filled = bar;
+    filled.right = bar.left + static_cast<LONG>((bar.right - bar.left) * std::clamp(patch.done, 0.0, 1.0));
+    if (filled.right > filled.left)
+        focus_bar(dc, filled);
+    frame(dc, bar, color::RowEdge);
+}
+
+LRESULT CALLBACK patch_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(wnd, &ps);
+        RECT client;
+        GetClientRect(wnd, &client);
+        HDC mem = CreateCompatibleDC(dc);
+        HBITMAP bmp = CreateCompatibleBitmap(dc, client.right, client.bottom);
+        HGDIOBJ old = SelectObject(mem, bmp);
+        paint_patch(mem);
+        BitBlt(dc, 0, 0, client.right, client.bottom, mem, 0, 0, SRCCOPY);
+        SelectObject(mem, old);
+        DeleteObject(bmp);
+        DeleteDC(mem);
+        EndPaint(wnd, &ps);
+        return 0;
+    }
+    case kMsgLog: { // "progress <0..1> <step>" for the lines that start a step
+        std::unique_ptr<std::wstring> line(reinterpret_cast<std::wstring*>(lp));
+        std::wstring step = setup::progress_line(*line);
+        if (step.empty())
+            return 0;
+        size_t space = step.find(L' ', 9);
+        patch.done = _wtof(step.substr(9, space - 9).c_str());
+        patch.step = space == std::wstring::npos ? L"" : step.substr(space + 1);
+        InvalidateRect(wnd, nullptr, FALSE);
+        return 0;
+    }
+    case kMsgDone: {
+        std::unique_ptr<std::wstring> value(reinterpret_cast<std::wstring*>(lp));
+        patch.result = wp == 1 ? 0 : 1;
+        if (wp != 1)
+            MessageBoxW(wnd, value->c_str(), kTitle, MB_OK | MB_ICONERROR);
+        DestroyWindow(wnd);
+        return 0;
+    }
+    case WM_CLOSE:
+        return 0; // until install() ends
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(wnd, msg, wp, lp);
+}
+
+int run_patch(HINSTANCE inst) {
+    ui.root = setup::exe_folder();
+    std::optional<setup::Paths> paths = setup::remembered_paths(ui.root);
+    if (!paths) {
+        MessageBoxW(nullptr, L"The game is not set up yet. Run deadnation-setup.exe.", kTitle, MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    setup::Options opt;
+    opt.root = ui.root;
+    opt.game = paths->game;
+    opt.save = paths->save;
+    opt.update = paths->update;
+    opt.update_in_release = true; // RecompLauncher's update\ folder, if it put the update there
+
+    ui.dpi = GetDpiForSystem();
+    load_fonts(inst);
+    ui.label = make_font(18, FW_BOLD);
+    ui.title = make_font(36, FW_BOLD);
+    WNDCLASSEXW wc = {sizeof(wc)};
+    wc.lpfnWndProc = patch_proc;
+    wc.hInstance = inst;
+    wc.hCursor = LoadCursorW(nullptr, IDC_WAIT);
+    wc.hIcon = LoadIconW(inst, MAKEINTRESOURCEW(1));
+    wc.lpszClassName = L"deadnation_patch";
+    RegisterClassExW(&wc);
+    const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_MINIMIZEBOX;
+    RECT r = {0, 0, px(kPatchWidth), px(kPatchHeight)};
+    AdjustWindowRectExForDpi(&r, style, FALSE, 0, ui.dpi);
+    RECT work = {};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+    const int w = r.right - r.left, h = r.bottom - r.top;
+    ui.wnd = CreateWindowExW(0, wc.lpszClassName, kTitle, style, work.left + (work.right - work.left - w) / 2,
+                             work.top + (work.bottom - work.top - h) / 2, w, h, nullptr, nullptr, inst, nullptr);
+    BOOL dark = TRUE;
+    DwmSetWindowAttribute(ui.wnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &dark, sizeof(dark));
+    COLORREF caption = color::BackRed;
+    DwmSetWindowAttribute(ui.wnd, 35 /* DWMWA_CAPTION_COLOR */, &caption, sizeof(caption));
+    ShowWindow(ui.wnd, SW_SHOW);
+    SetForegroundWindow(ui.wnd);
+
+    std::thread([opt, wnd = ui.wnd] {
+        auto log = [wnd](const std::wstring& line) {
+            PostMessageW(wnd, kMsgLog, 0, reinterpret_cast<LPARAM>(new std::wstring(line)));
+        };
+        try {
+            fs::path exe = setup::install(opt, log);
+            PostMessageW(wnd, kMsgDone, 1, reinterpret_cast<LPARAM>(new std::wstring(exe.wstring())));
+        } catch (const setup::Error& e) {
+            PostMessageW(wnd, kMsgDone, 0, reinterpret_cast<LPARAM>(new std::wstring(e.message)));
+        }
+    }).detach();
+    MSG msg;
+    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    DeleteObject(ui.label);
+    DeleteObject(ui.title);
+    return patch.result < 0 ? 1 : patch.result;
+}
+
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
@@ -794,6 +926,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     std::vector<std::wstring> args(argv + 1, argv + argc);
     LocalFree(argv);
+    if (args.size() == 1 && args[0] == L"--patch")
+        return run_patch(inst);
     if (!args.empty())
         return run_cli(args);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);

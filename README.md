@@ -36,14 +36,15 @@ This requires a decrypted dump of your own copy of the game. Tested with **CUSA0
   newer, Arch) and Python 3.10 or newer (`python3`) for the setup.
 - A CPU with AVX.
 - A GPU with Vulkan 1.3 and a current driver (on Linux, Mesa or the NVIDIA driver).
-- A decrypted dump of your own copy of the game: the folder with `eboot.bin`, `sce_module`,
-  `sce_sys`, `audio.pck`, `stream.dat`, `UI` and `Videos`.
-- Optionally the decrypted update (a folder with its own `eboot.bin` and `sce_sys`, e.g. `CUSA00236-patch`).
+- A decrypted dump of your own copy of the game, **CUSA00236** (version 1.00): the folder with `eboot.bin`,
+  `sce_module`, `sce_sys`, `audio.pck`, `stream.dat`, `UI` and `Videos`.
+- Its decrypted **1.03 update** (a folder with its own `eboot.bin` and `sce_sys`, e.g. `CUSA00236-patch`).
+- Exactly these: the setup checks both `eboot.bin` files and refuses other versions or regions.
 
 ## Install and play
 
-With [RecompLauncher](https://recomplauncher.com): install the recomp there, pick your dump folder (and
-the update folder, if you have it) on its setup screen, and press Play. The display settings are on
+With [RecompLauncher](https://recomplauncher.com): install the recomp there, pick your dump folder and
+the 1.03 update folder on its setup screen, and press Play. The display settings are on
 the game's page too.
 
 By hand:
@@ -51,29 +52,31 @@ By hand:
 1. [Download the latest release here](https://github.com/rcostanza/dead-nation-ps4-recomp/releases/latest)
 2. Unzip the release anywhere, for example `C:\Games\DeadNation`.
 3. Run `deadnation-setup.exe`.
-4. Choose your **game folder** (the dump), optionally an **update folder**, and a **save folder** (by default `save` inside the release folder). Each row says whether the folder is usable. Press **Install**: setup prepares the game from your dumps in a few seconds and offers a desktop shortcut. Your dumps are only read, never changed.
+4. Choose your **game folder** (the dump), the **update folder** (1.03), and a **save folder** (by default `save` inside the release folder). Each row says whether the folder is usable. Press **Install**: setup prepares the game from your dumps in a few seconds and offers a desktop shortcut. Your dumps are only read, never changed.
 5. Press **Play Game**. Later, start `deadnation.exe` or the shortcut.
+
+Starting `deadnation.exe` before the setup (or after a folder it was set up with is moved or deleted) opens the setup.
 
 Run `deadnation-setup.exe` again any time to change folders; it offers to copy your saves when the save folder moves. Untick **Skip the intro movies** there (or set `skip_intro=0` in `settings.ini`) to see them again.
 
 Setup also works from the command line:
 
 ```
-deadnation-setup.exe --game <dump> [--update <folder>] [--save <folder>]
+deadnation-setup.exe --game <dump> --update <folder> [--save <folder>]
 ```
 
 ### On Linux
 
 1. Extract the release anywhere you can write: `tar -xzf deadnation-pc-<version>-linux-x64.tar.gz -C ~/Games`
 2. Run `deadnation-setup`: from a file manager it asks with dialogs, in a terminal it asks there. It also
-   takes `--game <dump> [--update <folder>] [--save <folder>]`.
+   takes `--game <dump> --update <folder> [--save <folder>]`.
 3. Start the game from the menu entry it adds, or run `./deadnation`.
 
 On a Steam Deck, do this in Desktop Mode; _Add a Non-Steam Game_ in Steam then lists the menu entry.
 
 ### Updating
 
-Unzip the new release over the old folder and run the setup once more (the game asks you to). Your folders, saves, settings and shader caches are kept.
+Unzip the new release over the old folder and start the game: on its first start it prepares itself again from the same folders (a few seconds, with a progress window). No need to run the setup again. Your folders, saves, settings and shader caches are kept.
 
 ## Settings
 

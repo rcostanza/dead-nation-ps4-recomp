@@ -2,15 +2,19 @@
 // deadnation-setup (Linux): sets up the release folder it sits in (tools/package.py) from the player's
 // Dead Nation dump, so the game starts from deadnation or its menu entry.
 //
-// With no arguments it asks for the game folder (the dump), the save folder, whether to skip the
-// intro logos (settings.ini skip_intro) and the optional update folder, installs, and offers
+// With no arguments it asks for the game folder (the dump), the 1.03 update folder, the save folder
+// and whether to skip the intro logos (settings.ini skip_intro), installs, and offers
 // a menu entry and to start the game: in the terminal it was started from, or with the desktop's
-// dialogs (SDL: the folder picker and message boxes) when it has none, as from a file manager. Run it
-// again to change either folder, or after unpacking a newer release over the folder.
-// With arguments it installs from the command line:
+// dialogs (SDL: the folder picker and message boxes) when it has none, as from a file manager.
+// deadnation runs it when paths.ini is missing or names a folder that is gone; run it again to
+// change a folder.
+// With --patch (deadnation, when game/ isn't prepared for this release and these eboot.bin files) it
+// prepares game/ again from paths.ini's folders, with a small progress window when there is no
+// terminal: 0 when done.
+// With other arguments it installs from the command line:
 //
-//     deadnation-setup --game <dump or eboot.bin> [--save <folder>] [--copy-saves]
-//                       [--update <folder>|--no-update] [--skip-intro|--play-intro]
+//     deadnation-setup --game <dump or eboot.bin> --update <folder> [--save <folder>] [--copy-saves]
+//                       [--skip-intro|--play-intro]
 //                       [--shortcut <folder>|desktop|menu] [--prepare]
 
 #include "setup.h"
@@ -18,12 +22,15 @@
 #include <SDL3/SDL.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <iostream>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -51,15 +58,14 @@ void err(const std::wstring& s) {
 // --- command line -------------------------------------------------------------------------------
 
 constexpr wchar_t kUsage[] =
-    L"usage: deadnation-setup --game <dump or eboot.bin> [--save <folder>] [--copy-saves]\n"
-    L"                         [--update <folder>|--no-update] [--skip-intro|--play-intro]\n"
+    L"usage: deadnation-setup --game <dump or eboot.bin> --update <folder> [--save <folder>]\n"
+    L"                         [--copy-saves] [--skip-intro|--play-intro]\n"
     L"                         [--shortcut <folder>|desktop|menu] [--prepare]\n"
     L"  --game        the decrypted game dump (eboot.bin, sce_module, sce_sys, stream.dat); only ever read\n"
     L"  --save        where your saves go (default: the one paths.ini names, else save/ here)\n"
     L"  --copy-saves  when --save changes, copy the saves from the old save folder\n"
-    L"  --update      the decrypted update (patch, e.g. CUSA00236-patch), served over the dump; its\n"
-    L"                version is the one played (default: the one paths.ini names); --no-update plays\n"
-    L"                the dump's own version\n"
+    L"  --update      the decrypted 1.03 update (patch, e.g. CUSA00236-patch), served over the dump\n"
+    L"                (default: the one paths.ini names)\n"
     L"  --skip-intro, --play-intro\n"
     L"                skip the start-up logos and notices, or show them again\n"
     L"                (settings.ini skip_intro; default: leave it as it is)\n"
@@ -67,6 +73,7 @@ constexpr wchar_t kUsage[] =
     L"                the application menu\n"
     L"  --prepare     for launchers (RecompLauncher): also print \"progress <0..1> <step>\" lines; the\n"
     L"                update is only --update's folder, if it exists (it may be update/ here)\n"
+    L"  --patch       prepare the game again from paths.ini's folders (deadnation runs this)\n"
     L"Sets up the folder this program is in. With no arguments, asks for the folders.";
 
 fs::path shortcut_folder(const std::wstring& where) {
@@ -79,7 +86,7 @@ fs::path shortcut_folder(const std::wstring& where) {
 
 int run_cli(const std::vector<std::wstring>& args) {
     std::wstring game, save, shortcut, update;
-    bool copy_saves = false, no_update = false, prepare = false;
+    bool copy_saves = false, prepare = false;
     std::optional<bool> skip_intro;
     for (size_t i = 0; i < args.size(); ++i) {
         const std::wstring& a = args[i];
@@ -94,8 +101,6 @@ int run_cli(const std::vector<std::wstring>& args) {
             copy_saves = true;
         } else if (a == L"--skip-intro" || a == L"--play-intro") {
             skip_intro = a == L"--skip-intro";
-        } else if (a == L"--no-update") {
-            no_update = true;
         } else if (a == L"--prepare") {
             prepare = true;
         } else {
@@ -113,18 +118,15 @@ int run_cli(const std::vector<std::wstring>& args) {
         opt.game = setup::path_of(game);
         auto old = setup::remembered_paths(opt.root);
         opt.save = !save.empty() ? setup::path_of(save) : old ? old->save : setup::default_save();
-        opt.update = no_update ? fs::path() : !update.empty() ? setup::path_of(update) : old ? old->update : fs::path();
-        // --prepare: the launcher names the update each time, and passes its folder even when the
-        // player added none.
+        opt.update = !update.empty() ? setup::path_of(update) : old ? old->update : fs::path();
+        // --prepare: the launcher names the update each time (the folder it put the player's in).
         if (prepare) {
-            opt.update = no_update ? fs::path() : setup::update_in(setup::path_of(update));
+            opt.update = setup::update_in(setup::path_of(update));
             opt.update_in_release = true;
         }
         if (copy_saves)
             opt.copy_saves_from = saves_to_move(opt.root, opt.save);
         opt.skip_intro = skip_intro;
-        if (std::wstring warning = setup::version_warning(opt.game, opt.update); !warning.empty())
-            err(L"Warning:\n" + warning + L"\n");
         fs::path exe = setup::install(opt, [&](const std::wstring& line) {
             out(line);
             if (std::wstring step = setup::progress_line(line); prepare && !step.empty())
@@ -311,22 +313,19 @@ int run_asking(Asker& ask) {
         ask.folder(L"Select the game folder (your game dump, the one with eboot.bin)", paths ? paths->game : fs::path());
     if (!game)
         return 1;
-    // The update (patch) served over the dump: its version is the one played.
+    // The 1.03 update (patch) served over the dump: required.
     fs::path update = paths ? paths->update : fs::path();
-    int patched = update.empty()
-                      ? ask.choose(L"Do you have the game's update (e.g. CUSA00236-patch, version 1.03)?",
-                                   {L"No", L"Choose its folder", L"Cancel"})
-                      : ask.choose(L"Use the update in this folder?\n\n" + setup::text(update),
-                                   {L"Yes", L"Choose another folder", L"No", L"Cancel"});
-    if (patched < 0 || patched == (update.empty() ? 2 : 3))
+    int patched = update.empty() ? 1
+                                 : ask.choose(L"Use the update in this folder?\n\n" + setup::text(update),
+                                              {L"Yes", L"Choose another folder", L"Cancel"});
+    if (patched < 0 || patched == 2)
         return 1;
     if (patched == 1) {
-        std::optional<fs::path> picked = ask.folder(L"Select the update folder (the one with eboot.bin)", update);
+        std::optional<fs::path> picked =
+            ask.folder(L"Select the game's 1.03 update folder (e.g. CUSA00236-patch, the one with eboot.bin)", update);
         if (!picked)
             return 1;
         update = *picked;
-    } else if (!update.empty() && patched == 2) {
-        update.clear();
     }
     fs::path save = paths ? paths->save : setup::default_save();
     int keep = ask.choose(L"Keep your saves in this folder?\n\n" + setup::text(save),
@@ -353,10 +352,7 @@ int run_asking(Asker& ask) {
     opt.game = *game;
     opt.save = save;
     opt.skip_intro = (skip == 0) == skipping;
-    opt.update = update;
-    if (std::wstring warning = setup::version_warning(opt.game, opt.update); !warning.empty() &&
-        ask.choose(warning + L"\n\nInstall anyway?", {L"Cancel", L"Install anyway"}) != 1)
-        return 1;
+    opt.update = update; // install() checks the versions
     try {
         if (auto old = saves_to_move(opt.root, opt.save)) {
             int answer = ask.choose(L"Copy your saves to the new save folder?\n\nFrom: " + setup::text(*old) +
@@ -384,12 +380,124 @@ int run_asking(Asker& ask) {
     return 0;
 }
 
+// --- --patch ------------------------------------------------------------------------------------
+// deadnation found game/ not prepared for this release or these eboot.bin files: prepare it again
+// from paths.ini's folders. Without a terminal, a small window shows the step and a red bar (SDL's
+// renderer and its built-in text), and a message box says why when it fails: when the files aren't
+// the supported ones (install() checks them first), the game does not start.
+
+struct Progress {
+    std::mutex lock;
+    double done = 0;
+    std::string step = "Checking your game files";
+    std::wstring error;
+    bool ok = false;
+    std::atomic<bool> finished{false};
+};
+
+void draw_patch(SDL_Renderer* r, Progress& p) {
+    double done;
+    std::string step;
+    {
+        std::lock_guard<std::mutex> hold(p.lock);
+        done = p.done;
+        step = p.step;
+    }
+    SDL_SetRenderDrawColor(r, 0x20, 0x00, 0x00, 0xff);
+    SDL_RenderClear(r);
+    SDL_SetRenderScale(r, 2.0f, 2.0f);
+    SDL_SetRenderDrawColor(r, 0xff, 0xff, 0xff, 0xff);
+    SDL_RenderDebugText(r, 12, 14, "PREPARING DEAD NATION");
+    SDL_SetRenderScale(r, 1.0f, 1.0f);
+    SDL_SetRenderDrawColor(r, 0xd6, 0xd6, 0xd6, 0xff);
+    SDL_RenderDebugText(r, 24, 78, step.c_str());
+    SDL_FRect bar = {24, 100, 472, 22};
+    SDL_SetRenderDrawColor(r, 0x3c, 0x3c, 0x3c, 0xff);
+    SDL_RenderFillRect(r, &bar);
+    SDL_FRect filled = {bar.x, bar.y, bar.w * static_cast<float>(std::clamp(done, 0.0, 1.0)), bar.h};
+    SDL_SetRenderDrawColor(r, 0xd8, 0x10, 0x10, 0xff);
+    SDL_RenderFillRect(r, &filled);
+    SDL_SetRenderDrawColor(r, 0x5a, 0x5a, 0x5a, 0xff);
+    SDL_RenderRect(r, &bar);
+    SDL_RenderPresent(r);
+}
+
+int run_patch() {
+    fs::path root = setup::exe_folder();
+    std::optional<setup::Paths> paths = setup::remembered_paths(root);
+    bool window = !isatty(STDOUT_FILENO) && !isatty(STDERR_FILENO);
+    if (window) {
+        SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+        window = SDL_Init(SDL_INIT_VIDEO);
+    }
+    auto fail = [&](const std::wstring& message) {
+        err(message);
+        if (window) {
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, kTitle, setup::narrow(message).c_str(), nullptr);
+            SDL_Quit();
+        }
+        return 1;
+    };
+    if (!paths)
+        return fail(L"The game is not set up yet. Run deadnation-setup.");
+    setup::Options opt;
+    opt.root = root;
+    opt.game = paths->game;
+    opt.save = paths->save;
+    opt.update = paths->update;
+    opt.update_in_release = true; // RecompLauncher's update/ folder, if it put the update there
+
+    Progress p;
+    auto work = [&] {
+        try {
+            setup::install(opt, [&](const std::wstring& line) {
+                out(line);
+                std::wstring step = setup::progress_line(line);
+                if (step.empty())
+                    return;
+                size_t space = step.find(L' ', 9);
+                std::lock_guard<std::mutex> hold(p.lock);
+                p.done = std::wcstod(step.c_str() + 9, nullptr);
+                p.step = space == std::wstring::npos ? std::string() : setup::narrow(step.substr(space + 1));
+            });
+            p.ok = true;
+        } catch (const setup::Error& e) {
+            p.error = e.message;
+        }
+        p.finished = true;
+    };
+    SDL_Window* w = nullptr;
+    SDL_Renderer* r = nullptr;
+    if (window && SDL_CreateWindowAndRenderer(kTitle, 520, 150, 0, &w, &r)) {
+        std::thread worker(work);
+        while (!p.finished) {
+            SDL_Event e;
+            while (SDL_PollEvent(&e)) {
+            } // closing waits for the install to end
+            draw_patch(r, p);
+            SDL_Delay(33);
+        }
+        worker.join();
+        SDL_DestroyRenderer(r);
+        SDL_DestroyWindow(w);
+    } else {
+        work();
+    }
+    if (!p.ok)
+        return fail(p.error);
+    if (window)
+        SDL_Quit();
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     std::vector<std::wstring> args;
     for (int i = 1; i < argc; ++i)
         args.push_back(setup::widen(argv[i]));
+    if (args.size() == 1 && args[0] == L"--patch")
+        return run_patch();
     if (!args.empty())
         return run_cli(args);
     if (isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)) {

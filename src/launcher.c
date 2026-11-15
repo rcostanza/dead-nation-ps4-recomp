@@ -4,12 +4,13 @@
  *     [paths]
  *     game=<the dump: eboot.bin, sce_module, sce_sys, audio.pck, stream.dat>
  *     save=<saves and the launch log: what run.py calls --user>
- *     update=<optional: the decrypted update (patch), served over the dump>
+ *     update=<the decrypted 1.03 update (patch), served over the dump>
  *     cache=<optional: shader caches; by default shaders/ next to this exe, as run.py's>
  *     dlc=<optional: one more folder of DLC, read next to save's addcont, e.g. shadPS4's addcont>
  * Nothing is kept outside the release folder (no %APPDATA% or ~/.config copy).
  * Narrow strings are UTF-8 (Windows: the manifest's activeCodePage). */
 #include "launcher.h"
+#include "prepared_stamp.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -314,6 +315,63 @@ static int quiet_exit(unsigned long code) {
 #endif
 }
 
+/* `folder` names a folder with an eboot.bin (the dump, the update). */
+static int has_eboot(const char *folder) {
+    char eboot[PATH_CHARS];
+    if (!folder[0]) return 0;
+    snprintf(eboot, sizeof eboot, "%s" SEP "eboot.bin", folder);
+    return exists(eboot);
+}
+
+/* game/ holds an image prepared by this release from paths.ini's dump and update. */
+static int prepared(void) {
+    return exists(boot) && exists(profile) && deadnation_prepared(exe_dir, game, update);
+}
+
+/* Starts deadnation-setup (beside this exe, in its folder) with `arg`, or none for NULL. With
+ * `wait`: its exit code once it has ended, -1 when it could not start. Without, the setup takes
+ * over: Windows starts it (0) and Linux replaces this process with it (-1 when it cannot). */
+static int run_setup(const char *arg, int wait) {
+    char exe[PATH_CHARS];
+    snprintf(exe, sizeof exe, "%s" SEP SETUP, exe_dir);
+#ifdef _WIN32
+    static wchar_t wide_line[PATH_CHARS + 32], wide_dir[PATH_CHARS];
+    char line[PATH_CHARS + 32];
+    snprintf(line, sizeof line, "\"%s\"%s%s", exe, arg ? " " : "", arg ? arg : "");
+    if (!MultiByteToWideChar(CP_UTF8, 0, line, -1, wide_line, PATH_CHARS + 32) ||
+        !MultiByteToWideChar(CP_UTF8, 0, exe_dir, -1, wide_dir, PATH_CHARS)) return -1;
+    STARTUPINFOW startup = {.cb = sizeof startup};
+    PROCESS_INFORMATION setup;
+    if (!CreateProcessW(NULL, wide_line, NULL, NULL, FALSE, 0, NULL, wide_dir, &startup, &setup)) return -1;
+    AllowSetForegroundWindow(setup.dwProcessId);
+    CloseHandle(setup.hThread);
+    DWORD code = 0;
+    if (wait) {
+        WaitForSingleObject(setup.hProcess, INFINITE);
+        if (!GetExitCodeProcess(setup.hProcess, &code)) code = 1;
+    }
+    CloseHandle(setup.hProcess);
+    return code > 255 ? 1 : (int)code; /* ended from outside (0xC000013A, TerminateProcess): not -1 */
+#else
+    char *setup_argv[] = {exe, (char *)arg, NULL};
+    fflush(NULL);
+    if (!wait) {
+        if (!chdir(exe_dir)) execv(exe, setup_argv);
+        return -1;
+    }
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (!pid) {
+        if (!chdir(exe_dir)) execv(exe, setup_argv);
+        _exit(127);
+    }
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    if (!WIFEXITED(status)) return 1;
+    return WEXITSTATUS(status) == 127 ? -1 : WEXITSTATUS(status);
+#endif
+}
+
 int launch_from_paths_ini(int *argc, char ***argv) {
     int console = 0;
     for (int i = 1; i < *argc; ++i) console |= !strcmp((*argv)[i], "--console");
@@ -337,9 +395,15 @@ int launch_from_paths_ini(int *argc, char ***argv) {
 
     char ini[PATH_CHARS], message[3 * PATH_CHARS];
     snprintf(ini, sizeof ini, "%s" SEP "paths.ini", exe_dir);
-    if (!read_paths(ini)) {
-        complain("The game is not set up yet.\n\n" RUN_SETUP);
-        return 1;
+    /* Not set up, or a folder paths.ini names is gone: the setup takes over (its window, or its
+     * questions in this terminal); it starts the game itself once it is done. */
+    if (!read_paths(ini) || !has_eboot(game) || !has_eboot(update)) {
+        fprintf(stderr, "The game is not set up yet, or a folder it was set up with is gone: starting " SETUP ".\n");
+        if (run_setup(NULL, 0) < 0) {
+            complain("The game is not set up yet.\n\n" RUN_SETUP);
+            return 1;
+        }
+        exit(0);
     }
     /* DEADNATION_SAVE_DIR overrides save= (a relative one is relative to the exe's folder). */
     const char *save_override = getenv("DEADNATION_SAVE_DIR");
@@ -350,23 +414,24 @@ int launch_from_paths_ini(int *argc, char ***argv) {
     snprintf(boot, sizeof boot, "%s" SEP "game" SEP "boot-linked.bin", exe_dir);
     snprintf(profile, sizeof profile, "%s" SEP "game" SEP "content.bin", exe_dir);
     snprintf(isa, sizeof isa, "%s" SEP "game" SEP "isa-rewrite.bin", exe_dir);
-    /* The image is built by this release's scripts for this exe: after a new release is unpacked
-     * over an old one, the setup has to prepare it again. */
-    char release[PATH_CHARS], prepared_for[256], current[256];
-    snprintf(release, sizeof release, "%s" SEP "game" SEP "release.txt", exe_dir);
-    first_line(release, prepared_for, sizeof prepared_for);
+    /* The image is built by this release's scripts from these eboot.bin files (src/prepared_stamp.h):
+     * when this is a newer release or the dump or update changed, the setup prepares it again, and
+     * first checks the files are the supported ones (else it says so and the game does not start). */
+    char release[PATH_CHARS], current[256];
     snprintf(release, sizeof release, "%s" SEP "release.txt", exe_dir);
     first_line(release, current, sizeof current);
-    if (!exists(boot) || !exists(profile) || strcmp(prepared_for, current)) {
-        complain("This version of the game is not set up yet.\n\n" RUN_SETUP);
-        return 1;
-    }
-    char eboot[PATH_CHARS];
-    snprintf(eboot, sizeof eboot, "%s" SEP "eboot.bin", game);
-    if (!exists(eboot)) {
-        snprintf(message, sizeof message, "The game folder is gone or has no eboot.bin:\n%s\n\n" RUN_SETUP, game);
-        complain(message);
-        return 1;
+    if (!prepared()) {
+        printf("Launch: preparing the game (" SETUP " --patch)\n");
+        int code = run_setup("--patch", 1);
+        if (code < 0) {
+            complain("Cannot start " SETUP " to prepare the game." "\n\nThis folder is incomplete: unpack the whole release again.");
+            return 1;
+        }
+        if (code) return 1; /* the setup told the player why */
+        if (!prepared()) {
+            complain("The game could not be prepared.\n\n" RUN_SETUP);
+            return 1;
+        }
     }
     if (!make_dirs(save)) {
         snprintf(message, sizeof message, "Cannot create the save folder:\n%s\n\n" RUN_SETUP, save);
