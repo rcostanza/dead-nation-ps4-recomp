@@ -2,6 +2,12 @@
  * are pumped by the window thread (gpu/shim/window.cpp); here state is only sampled, on the pad's
  * own host thread (host_thread).
  *
+ * Two local players (local co-op): the first gamepad and the keyboard are user 1's pad (handle 1),
+ * the second gamepad user 2's (handle 2). User 2 logs in (runtime_services.c, sceUserService) when a
+ * second gamepad first connects and stays logged in, as on a PS4; their pad then reads disconnected
+ * while no second gamepad is there. A pad that drops frees its slot, and the next one to connect
+ * takes the lowest free slot.
+ *
  * Gamepads map by position: the bottom face button is Cross, right Circle, left Square, top
  * Triangle (an Xbox pad's A B X Y). View/Back clicks the touchpad; a DualSense's own touchpad works.
  *
@@ -26,7 +32,7 @@
 #define ERR_INVALID_HANDLE ((int32_t)0x80920003)
 #define ERR_ALREADY_OPENED ((int32_t)0x80920004)
 #define ERR_NOT_INITIALIZED ((int32_t)0x80920005)
-#define PAD_HANDLE 1
+#define PADS 2 /* users 1 and 2; handle = user */
 
 enum {
     BTN_L3=0x2, BTN_R3=0x4, BTN_OPTIONS=0x8, BTN_UP=0x10, BTN_RIGHT=0x20, BTN_DOWN=0x40, BTN_LEFT=0x80,
@@ -67,16 +73,17 @@ _Static_assert(__builtin_offsetof(PadData,timestamp)==80,"OrbisPadData timestamp
 _Static_assert(sizeof(ControllerInfo)==28,"OrbisPadControllerInformation layout");
 
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
-static int initialized, opened, sdl_ready;
+static int initialized, opened[PADS], sdl_ready;
 static size_t reads, vibrations;
 /* The host side runs on its own thread (host_thread): opening, closing and even reading an SDL
  * gamepad can block for hundreds of ms while a Bluetooth pad connects or drops (SDL holds its
  * joystick lock meanwhile), and on the game's thread that froze the frame. The thread samples every
  * millisecond and a read copies the latest sample, so the game's threads make no gamepad calls. */
 static pthread_mutex_t host_lock=PTHREAD_MUTEX_INITIALIZER;
-static PadData host_sample;           /* under host_lock */
-static char gamepad_name[64]="none";  /* under host_lock */
-static struct { uint8_t large, small; uint32_t serial; } rumble; /* under host_lock */
+static PadData host_sample[PADS];                   /* under host_lock */
+static char gamepad_name[PADS][64]={"none","none"}; /* under host_lock */
+static struct { uint8_t large, small; uint32_t serial; } rumble[PADS]; /* under host_lock */
+static _Atomic int second_user;       /* a second gamepad has connected: user 2 logged in */
 static int reconnect_wanted;          /* atomic: the pad file's reconnect token */
 
 static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u; }
@@ -108,8 +115,9 @@ static uint16_t touch_axis(float v, int max) {
  * stays at least CLICK_HOLD_US, and the touch lingers CLICK_TAIL_US after the release, as a real
  * finger would. */
 enum { CLICK_LEAD_US=50000, CLICK_HOLD_US=50000, CLICK_TAIL_US=100000 };
-static struct { bool active; uint64_t pressed, released; } click;
-static void play_click(PadData *d) {
+typedef struct { bool active; uint64_t pressed, released; } Click;
+static Click clicks[PADS];
+static void play_click(PadData *d, Click *c) {
     const uint64_t now=d->timestamp;
     bool source=(d->buttons & CLICK)!=0;
     d->buttons&=~CLICK;
@@ -117,14 +125,14 @@ static void play_click(PadData *d) {
         d->buttons&=~BTN_TOUCHPAD;
         source=true;
     }
-    if (source && (!click.active || click.released)) { click.active=true; click.pressed=now; click.released=0; }
-    else if (!source && click.active && !click.released) click.released=now;
-    if (!click.active) return;
-    const uint64_t down=click.pressed+CLICK_LEAD_US;
+    if (source && (!c->active || c->released)) { c->active=true; c->pressed=now; c->released=0; }
+    else if (!source && c->active && !c->released) c->released=now;
+    if (!c->active) return;
+    const uint64_t down=c->pressed+CLICK_LEAD_US;
     uint64_t up=down+CLICK_HOLD_US;
-    if (!click.released) up=UINT64_MAX;
-    else if (click.released>up) up=click.released;
-    if (now>=up && now-up>=CLICK_TAIL_US) { click.active=false; return; }
+    if (!c->released) up=UINT64_MAX;
+    else if (c->released>up) up=c->released;
+    if (now>=up && now-up>=CLICK_TAIL_US) { c->active=false; return; }
     if (d->touch_count<2) {
         d->touches[d->touch_count]=(PadTouch){.x=960,.y=471,.id=d->touch_count};
         ++d->touch_count;
@@ -132,30 +140,39 @@ static void play_click(PadData *d) {
     if (now>=down && now<up) d->buttons|=BTN_TOUCHPAD;
 }
 
-/* Host thread: the open gamepad, closing it when it is gone or the pad file asked for a reconnect,
- * and looking for one every 100 ms while there is none. */
-static SDL_Gamepad *host_gamepad(SDL_Gamepad *g, uint64_t now, uint64_t *next_scan, uint8_t *connected_count) {
-    if (g && (__atomic_exchange_n(&reconnect_wanted,0,__ATOMIC_ACQ_REL) || !SDL_GamepadConnected(g))) {
-        SDL_CloseGamepad(g); g=NULL;
-        pthread_mutex_lock(&host_lock); strcpy(gamepad_name,"none"); pthread_mutex_unlock(&host_lock);
-        puts("Runtime: gamepad closed");
+/* Host thread: the open gamepads, one per slot. A slot's gamepad closes when it is gone (or, for
+ * slot 0, when the pad file asked for a reconnect); while a slot is free, connected gamepads not
+ * yet open are looked for every 100 ms, and each fills the lowest free slot. */
+static void host_gamepads(SDL_Gamepad **g, uint64_t now, uint64_t *next_scan, uint8_t *connected_count) {
+    const int reconnect=__atomic_exchange_n(&reconnect_wanted,0,__ATOMIC_ACQ_REL);
+    for (int slot=0;slot<PADS;++slot) {
+        if (!g[slot] || (!(reconnect && slot==0) && SDL_GamepadConnected(g[slot]))) continue;
+        SDL_CloseGamepad(g[slot]); g[slot]=NULL;
+        pthread_mutex_lock(&host_lock); strcpy(gamepad_name[slot],"none"); pthread_mutex_unlock(&host_lock);
+        printf("Runtime: gamepad %d closed\n",slot+1);
     }
-    if (g || now<*next_scan) return g;
+    int free_slot=0;
+    while (free_slot<PADS && g[free_slot]) ++free_slot;
+    if (free_slot==PADS || now<*next_scan) return;
     *next_scan=now+100000;
-    __atomic_store_n(&reconnect_wanted,0,__ATOMIC_RELEASE);
     int count=0;
     SDL_JoystickID *ids=SDL_GetGamepads(&count);
-    if (ids && count>0 && (g=SDL_OpenGamepad(ids[0]))) {
-        ++*connected_count;
-        const char *name=SDL_GetGamepadName(g);
+    for (int i=0;ids && i<count && free_slot<PADS;++i) {
+        bool open=false;
+        for (int slot=0;slot<PADS;++slot) if (g[slot] && SDL_GetGamepadID(g[slot])==ids[i]) open=true;
+        if (open || !(g[free_slot]=SDL_OpenGamepad(ids[i]))) continue;
+        ++connected_count[free_slot];
+        const char *name=SDL_GetGamepadName(g[free_slot]);
         pthread_mutex_lock(&host_lock);
-        snprintf(gamepad_name,sizeof(gamepad_name),"%s",name ? name : "gamepad");
+        snprintf(gamepad_name[free_slot],sizeof(gamepad_name[free_slot]),"%s",name ? name : "gamepad");
         pthread_mutex_unlock(&host_lock);
-        printf("Runtime: gamepad connected: %s\n",name ? name : "gamepad");
+        printf("Runtime: gamepad %d connected: %s\n",free_slot+1,name ? name : "gamepad");
+        if (free_slot==1 && !atomic_exchange(&second_user,1)) puts("Runtime: second gamepad; user 2 logs in");
+        while (free_slot<PADS && g[free_slot]) ++free_slot;
     }
     SDL_free(ids);
-    return g;
 }
+int runtime_pad_second_user(void) { return atomic_load(&second_user); }
 /* PS4 button names for scripted input (DEADNATION_PAD_FILE). */
 static const struct { const char *name; uint32_t ps; } ps_names[]={
     {"cross",BTN_CROSS}, {"circle",BTN_CIRCLE}, {"square",BTN_SQUARE}, {"triangle",BTN_TRIANGLE},
@@ -212,14 +229,15 @@ static uint32_t sample_keyboard(PadData *d, const bool *keys) {
     return pressed;
 }
 
-/* Host thread: the gamepad and keyboard as one PadData (no timestamp). */
-static void host_read(PadData *d, SDL_Gamepad *g, uint8_t connected_count) {
+/* Host thread: a slot's gamepad (and for slot 0 the keyboard) as one PadData (no timestamp).
+ * Slot 0 always reads connected (the keyboard); slot 1 only with its gamepad. */
+static void host_read(PadData *d, SDL_Gamepad *g, uint8_t connected_count, int slot) {
     memset(d,0,sizeof(*d));
     d->left_x=d->left_y=d->right_x=d->right_y=128;
     d->orientation[3]=1.0f;
-    d->connected=1; d->connected_count=connected_count ? connected_count : 1;
+    d->connected=slot==0 || g; d->connected_count=connected_count ? connected_count : 1;
     if (deadnation_gpu_overlay_captures_input()) return; /* a dialog is open: neutral input */
-    const bool *k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
+    const bool *k=slot==0 && SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
     if (g) {
         for (size_t i=0;i<pad_map.count;++i)
             if (SDL_GetGamepadButton(g,(SDL_GamepadButton)pad_map.entries[i].source)) d->buttons|=pad_map.entries[i].ps;
@@ -254,10 +272,12 @@ static void host_read(PadData *d, SDL_Gamepad *g, uint8_t connected_count) {
  * Select+Start opens the exit prompt (the overlay's event handler, as F4): Start (Options) is held
  * back while Select is down, and once pressed with it, until Start is let go. */
 enum { SELECT_HOLD_US=2000000, SELECT_TAP_US=60000 };
-static void select_hold(PadData *d, SDL_Gamepad *g, uint64_t now) {
-    static uint64_t since, tap_until;
-    static bool opened; /* this hold opened the panel, or an overlay had the input: no tap */
-    static bool start_held_back;
+typedef struct {
+    uint64_t since, tap_until;
+    bool opened; /* this hold opened the panel, or an overlay had the input: no tap */
+    bool start_held_back;
+} SelectHold;
+static void select_hold(PadData *d, SDL_Gamepad *g, uint64_t now, SelectHold *h) {
     uint32_t bits=0, start_bits=0;
     for (size_t i=0;i<pad_map.count;++i) {
         if (pad_map.entries[i].source==SDL_GAMEPAD_BUTTON_BACK) bits|=pad_map.entries[i].ps;
@@ -265,15 +285,15 @@ static void select_hold(PadData *d, SDL_Gamepad *g, uint64_t now) {
     }
     const bool down=g && SDL_GetGamepadButton(g,SDL_GAMEPAD_BUTTON_BACK);
     const bool start_down=g && SDL_GetGamepadButton(g,SDL_GAMEPAD_BUTTON_START);
-    if (down && start_down) { start_held_back=true; opened=true; }
-    if (!start_down) start_held_back=false;
-    if (start_held_back) d->buttons&=~start_bits;
+    if (down && start_down) { h->start_held_back=true; h->opened=true; }
+    if (!start_down) h->start_held_back=false;
+    if (h->start_held_back) d->buttons&=~start_bits;
     if (down) {
-        if (!since) { since=now; opened=false; }
-        if (deadnation_gpu_overlay_captures_input()) opened=true;
+        if (!h->since) { h->since=now; h->opened=false; }
+        if (deadnation_gpu_overlay_captures_input()) h->opened=true;
         d->buttons&=~bits;
-        if (!opened && now-since>=SELECT_HOLD_US) {
-            opened=true;
+        if (!h->opened && now-h->since>=SELECT_HOLD_US) {
+            h->opened=true;
             if (!deadnation_display_settings_is_open()) {
                 deadnation_display_settings_open();
                 puts("Runtime: Select held; Display Settings opened");
@@ -281,11 +301,11 @@ static void select_hold(PadData *d, SDL_Gamepad *g, uint64_t now) {
         }
         return;
     }
-    if (since) {
-        if (!opened) tap_until=now+SELECT_TAP_US;
-        since=0;
+    if (h->since) {
+        if (!h->opened) h->tap_until=now+SELECT_TAP_US;
+        h->since=0;
     }
-    if (now<tap_until) d->buttons|=bits;
+    if (now<h->tap_until) d->buttons|=bits;
 }
 
 /* Game's pad read (sample): settings.ini title_back_exits. Back (Circle: B, Escape, Backspace, or
@@ -312,25 +332,28 @@ static void title_back(PadData *d) {
  * rumble is sent for 1000 ms. */
 static void *host_thread(void *arg) {
     (void)arg;
-    SDL_Gamepad *g=NULL;
-    uint64_t next_scan=0, rumble_sent=0;
-    uint32_t rumble_serial=0;
-    uint8_t connected_count=0;
+    SDL_Gamepad *g[PADS]={0};
+    SelectHold holds[PADS]={0};
+    uint64_t next_scan=0, rumble_sent[PADS]={0};
+    uint32_t rumble_serial[PADS]={0};
+    uint8_t connected_count[PADS]={0};
     for (;;) {
         const uint64_t start=now_us();
         if (!sdl_ready) sdl_ready = SDL_WasInit(SDL_INIT_GAMEPAD) ? 1 : SDL_InitSubSystem(SDL_INIT_GAMEPAD) ? 1 : -1;
-        if (sdl_ready>0) g=host_gamepad(g,start,&next_scan,&connected_count);
-        PadData d;
-        host_read(&d,g,connected_count);
-        select_hold(&d,g,start);
-        pthread_mutex_lock(&host_lock);
-        host_sample=d;
-        const uint8_t large=rumble.large, small=rumble.small;
-        const uint32_t serial=rumble.serial;
-        pthread_mutex_unlock(&host_lock);
-        if (g && (serial!=rumble_serial || ((large || small) && start-rumble_sent>=500000))) {
-            SDL_RumbleGamepad(g,(uint16_t)(large*257u),(uint16_t)(small*257u),1000);
-            rumble_serial=serial; rumble_sent=start;
+        if (sdl_ready>0) host_gamepads(g,start,&next_scan,connected_count);
+        for (int slot=0;slot<PADS;++slot) {
+            PadData d;
+            host_read(&d,g[slot],connected_count[slot],slot);
+            select_hold(&d,g[slot],start,&holds[slot]);
+            pthread_mutex_lock(&host_lock);
+            host_sample[slot]=d;
+            const uint8_t large=rumble[slot].large, small=rumble[slot].small;
+            const uint32_t serial=rumble[slot].serial;
+            pthread_mutex_unlock(&host_lock);
+            if (g[slot] && (serial!=rumble_serial[slot] || ((large || small) && start-rumble_sent[slot]>=500000))) {
+                SDL_RumbleGamepad(g[slot],(uint16_t)(large*257u),(uint16_t)(small*257u),1000);
+                rumble_serial[slot]=serial; rumble_sent[slot]=start;
+            }
         }
         note_call(SLOW_HOST,start);
         SDL_DelayNS(1000000);
@@ -341,7 +364,7 @@ static void *host_thread(void *arg) {
 /* DEADNATION_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated
  * tokens, re-read when it changes: button names (cross circle square triangle l1 r1 l2 r2 l3 r3
  * options touchpad up down left right) are held while listed; lx= ly= rx= ry= (0..255) override
- * the sticks; reconnect closes the gamepad once per edit and the host thread opens
+ * the sticks (all on user 1's pad); reconnect closes the first gamepad once per edit and the host thread opens
  * it again, as after a real reconnect; settings (or settings=<row>) opens the Display Settings
  * panel once per edit, as F10 does, with that row focused. An empty file releases everything. */
 static struct { uint32_t buttons; int stick[4]; } injected={0,{-1,-1,-1,-1}};
@@ -379,7 +402,7 @@ static void read_inject(void) {
         for (int i=0;i<4;++i) if (!strncmp(token,sticks[i],3)) { int v=atoi(token+3); injected.stick[i]=v<0 ? 0 : v>255 ? 255 : v; }
     }
     fclose(f);
-    if (reconnect) __atomic_store_n(&reconnect_wanted,1,__ATOMIC_RELEASE); /* host_gamepad closes it */
+    if (reconnect) __atomic_store_n(&reconnect_wanted,1,__ATOMIC_RELEASE); /* host_gamepads closes it */
     printf("Runtime: pad file: buttons 0x%x sticks %d %d %d %d\n",injected.buttons,
            injected.stick[0],injected.stick[1],injected.stick[2],injected.stick[3]);
 }
@@ -495,19 +518,30 @@ static void title_press(PadData *d) {
 }
 
 /* After a dialog closes, buttons still held (the Cross that accepted a name) stay hidden until
- * released: the game would take them as a new press. */
-static int hold_after_capture;
-static void sample(PadData *d) {
+ * released: the game would take them as a new press. Scripted input, the intro skip and title Back
+ * are user 1's. */
+static int hold_after_capture[PADS];
+static void sample(PadData *d, int slot) {
     pthread_mutex_lock(&host_lock);
-    *d=host_sample;
+    *d=host_sample[slot];
     pthread_mutex_unlock(&host_lock);
-    if (!d->connected) { /* before the host thread's first sample */
+    if (!d->connected) { /* slot 1 without its gamepad, or before the host thread's first sample */
         d->left_x=d->left_y=d->right_x=d->right_y=128;
         d->orientation[3]=1.0f;
-        d->connected=d->connected_count=1;
+        d->connected=slot==0;
+        if (!d->connected_count) d->connected_count=1;
     }
     d->timestamp=now_us();
-    if (deadnation_gpu_overlay_captures_input()) { hold_after_capture=1; click.active=false; title_back(d); return; }
+    if (slot) {
+        if (deadnation_gpu_overlay_captures_input()) { hold_after_capture[slot]=1; clicks[slot].active=false; return; }
+        play_click(d,&clicks[slot]);
+        if (hold_after_capture[slot]) {
+            if (d->buttons) d->buttons=0;
+            else hold_after_capture[slot]=0;
+        }
+        return;
+    }
+    if (deadnation_gpu_overlay_captures_input()) { hold_after_capture[0]=1; clicks[0].active=false; title_back(d); return; }
     record_sample(d); /* the click sources as they are: a replay plays them again */
     read_inject();
     replay_sample(d);
@@ -517,11 +551,11 @@ static void sample(PadData *d) {
     uint8_t *axes[4]={&d->left_x,&d->left_y,&d->right_x,&d->right_y};
     for (int i=0;i<4;++i) if (injected.stick[i]>=0) *axes[i]=(uint8_t)injected.stick[i];
     title_back(d);
-    play_click(d);
+    play_click(d,&clicks[0]);
     title_press(d);
-    if (hold_after_capture) {
+    if (hold_after_capture[0]) {
         if (d->buttons) d->buttons=0;
-        else hold_after_capture=0;
+        else hold_after_capture[0]=0;
     }
 }
 
@@ -531,71 +565,82 @@ static void start_host_thread(void) {
     else puts("Runtime: pad host thread failed to start; the pad reads neutral");
 }
 static ABI int32_t pad_init(void) { pthread_mutex_lock(&lock); initialized=1; pthread_mutex_unlock(&lock); return 0; }
+/* scePadOpen(user, type, index, param): one standard (0) or special (2) port per user, index 0;
+ * the handle is the user id. User 2 must be logged in (a second gamepad has connected). */
 static ABI int32_t pad_open(int32_t user, int32_t type, int32_t index, const void *param) {
     (void)param;
     if (!initialized) return ERR_NOT_INITIALIZED;
-    if (user!=1) return ERR_INVALID_ARG;
+    if (user<1 || user>PADS || (user==2 && !runtime_pad_second_user())) return ERR_INVALID_ARG;
     if (type!=0 && type!=2) return ERR_INVALID_ARG; /* standard / special port */
     if (index) return ERR_INVALID_ARG;
     pthread_mutex_lock(&lock);
-    int already=opened; opened=1;
+    int already=opened[user-1]; opened[user-1]=1;
     pthread_mutex_unlock(&lock);
     if (already) return ERR_ALREADY_OPENED;
     static pthread_once_t host_started=PTHREAD_ONCE_INIT;
     pthread_once(&host_started,start_host_thread);
-    puts("Runtime: pad opened for user 1 (SDL gamepad or keyboard)");
-    return PAD_HANDLE;
+    printf("Runtime: pad opened for user %d (%s)\n",user,user==1 ? "first gamepad or keyboard" : "second gamepad");
+    return user;
 }
+/* The slot of an open handle, or -1. */
+static int pad_slot(int32_t handle) { return handle>=1 && handle<=PADS && opened[handle-1] ? handle-1 : -1; }
 static ABI int32_t pad_close(int32_t handle) {
-    if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
-    opened=0; return 0;
+    const int slot=pad_slot(handle);
+    if (slot<0) return ERR_INVALID_HANDLE;
+    opened[slot]=0; return 0;
 }
 static ABI int32_t pad_read_state(int32_t handle, PadData *data) {
-    if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
+    const int slot=pad_slot(handle);
+    if (slot<0) return ERR_INVALID_HANDLE;
     if (!data) return ERR_INVALID_ARG;
     const uint64_t start=now_us();
     pthread_mutex_lock(&lock);
-    sample(data); ++reads;
+    sample(data,slot); ++reads;
     note_call(SLOW_READ,start);
     pthread_mutex_unlock(&lock);
     return 0;
 }
 static ABI int32_t pad_info(int32_t handle, ControllerInfo *info) {
-    if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
+    const int slot=pad_slot(handle);
+    if (slot<0) return ERR_INVALID_HANDLE;
     if (!info) return ERR_INVALID_ARG;
     memset(info,0,sizeof(*info));
     info->pixel_density=44.86f; info->resolution_x=1920; info->resolution_y=943;
     info->dead_zone_left=info->dead_zone_right=2;
-    info->connection_type=0; info->connected=1; info->device_class=0;
+    info->connection_type=0; info->device_class=0;
     const uint64_t start=now_us();
     pthread_mutex_lock(&host_lock);
-    info->connected_count=host_sample.connected_count ? host_sample.connected_count : 1;
+    info->connected=slot==0 || host_sample[slot].connected;
+    info->connected_count=host_sample[slot].connected_count ? host_sample[slot].connected_count : 1;
     pthread_mutex_unlock(&host_lock);
     note_call(SLOW_INFO,start);
     return 0;
 }
 static ABI int32_t pad_vibration(int32_t handle, const uint8_t *param) {
-    if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
+    const int slot=pad_slot(handle);
+    if (slot<0) return ERR_INVALID_HANDLE;
     if (!param) return ERR_INVALID_ARG;
     const uint64_t start=now_us();
     pthread_mutex_lock(&host_lock); /* host_thread sends it */
-    if (rumble.large!=param[0] || rumble.small!=param[1]) { rumble.large=param[0]; rumble.small=param[1]; ++rumble.serial; }
+    if (rumble[slot].large!=param[0] || rumble[slot].small!=param[1]) {
+        rumble[slot].large=param[0]; rumble[slot].small=param[1]; ++rumble[slot].serial;
+    }
     pthread_mutex_unlock(&host_lock);
     note_call(SLOW_VIBRATION,start);
     __atomic_add_fetch(&vibrations,1,__ATOMIC_RELAXED);
     return 0;
 }
-static ABI int32_t pad_ok_handle(int32_t handle) { return handle==PAD_HANDLE && opened ? 0 : ERR_INVALID_HANDLE; }
+static ABI int32_t pad_ok_handle(int32_t handle) { return pad_slot(handle)>=0 ? 0 : ERR_INVALID_HANDLE; }
 static ABI int32_t pad_ok_handle_flag(int32_t handle, uint8_t flag) { (void)flag; return pad_ok_handle(handle); }
 
 static ABI int32_t pad_light_bar(int32_t handle, const uint8_t *rgb) {
-    if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
+    if (pad_slot(handle)<0) return ERR_INVALID_HANDLE;
     (void)rgb; return 0;
 }
 /* scePadRead(handle, data, count): up to 64 buffered states, oldest first; the runner keeps no
  * history, so one: the current state (as scePadReadState). */
 static ABI int32_t pad_read(int32_t handle, PadData *data, int32_t count) {
-    if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
+    if (pad_slot(handle)<0) return ERR_INVALID_HANDLE;
     if (!data || count<1 || count>64) return ERR_INVALID_ARG;
     int32_t r=pad_read_state(handle,data);
     return r ? r : 1;
@@ -611,10 +656,10 @@ static const RuntimeExport exports[]={
 };
 uintptr_t runtime_pad_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
 void runtime_pad_report(void) {
-    char name[sizeof(gamepad_name)];
+    char name[PADS][sizeof(gamepad_name[0])];
     pthread_mutex_lock(&host_lock); memcpy(name,gamepad_name,sizeof(name)); pthread_mutex_unlock(&host_lock);
-    printf("Runtime: pad reads=%zu, vibrations=%zu, gamepad=%s; over 2 ms: reads %zu (max %.1f ms), "
-           "vibrations %zu (max %.1f ms), info %zu (max %.1f ms), host samples %zu (max %.1f ms)\n",reads,vibrations,name,
+    printf("Runtime: pad reads=%zu, vibrations=%zu, gamepads=%s, %s; over 2 ms: reads %zu (max %.1f ms), "
+           "vibrations %zu (max %.1f ms), info %zu (max %.1f ms), host samples %zu (max %.1f ms)\n",reads,vibrations,name[0],name[1],
            slow_calls[SLOW_READ],slow_max_us[SLOW_READ]/1e3,slow_calls[SLOW_VIBRATION],slow_max_us[SLOW_VIBRATION]/1e3,
            slow_calls[SLOW_INFO],slow_max_us[SLOW_INFO]/1e3,slow_calls[SLOW_HOST],slow_max_us[SLOW_HOST]/1e3);
 }

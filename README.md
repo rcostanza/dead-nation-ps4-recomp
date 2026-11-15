@@ -25,7 +25,7 @@ This requires a decrypted dump of your own copy of the game. Tested with **CUSA0
 - **Settings outside the game:** `settings.exe` (beside the game and the setup; `settings` on Linux) shows the same page, plus speakers, intro skip and the title screen's Back, and saves each change at once. Keyboard, mouse or gamepad.
 - **AMD FSR 1 RCAS sharpening**, on by default, switchable in the panel or with **F9**.
 - **Keyboard and any gamepad.** DualShock 4 and DualSense work as they are, Xbox-style pads by
-  button position.
+  button position. Two gamepads for local co-op.
 - **Easy setup:** point the installer at your dumps, and it can add a desktop shortcut (on Linux, an application menu entry).
 - **Self-contained:** shader caches, settings and paths stay in the game's folder; nothing goes to `%APPDATA%`.
 
@@ -95,9 +95,10 @@ Unzip the new release over the old folder and start the game: on its first start
 
 ## Controls
 
-The game sees one DualShock 4. Any gamepad works, mapped by button position: on an Xbox pad A B X Y
+The game sees a DualShock 4 per player. Any gamepad works, mapped by button position: on an Xbox pad A B X Y
 are Cross, Circle, Square, Triangle, LB/RB are L1/R1, LT/RT are L2/R2, Menu is Options and View
-clicks the touchpad. The keyboard works alongside a gamepad (no mouse aiming _yet_):
+clicks the touchpad. The keyboard works alongside the first gamepad, as player 1 (no mouse aiming _yet_).
+For local co-op, connect a second gamepad: it signs in player 2, as a second PS4 user would.
 
 | Keys                      | PS4                      |
 | ------------------------- | ------------------------ |

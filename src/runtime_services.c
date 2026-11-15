@@ -1,9 +1,10 @@
-/* System services for an offline, single-user console:
- *   - one local user (id 1) who is logged in but not signed in to PSN;
+/* System services for an offline console:
+ *   - local user 1 (and user 2 once a second gamepad connects), logged in but not signed in to PSN;
  *   - network cable unplugged: NetCtl disconnected;
  *   - common dialogs complete immediately (no UI is drawn yet);
  *   - the whole package is installed (no disc map).
- * Every entry here is an explicit contract; unknown functions still stop. */
+ * Every entry here is an explicit contract; unknown functions still stop.
+ * A second local user logs in with a second gamepad (local co-op; see UserService). */
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "gpu/deadnation_gpu.h"
@@ -46,33 +47,44 @@ static int next_id=1;
 static int new_id(void) { pthread_mutex_lock(&lock); int id=next_id++; pthread_mutex_unlock(&lock); return id; }
 static void note(const char *what) { printf("Runtime: %s\n",what); }
 
-/* ---- UserService ---- */
-static int login_event_pending=1;
+/* ---- UserService ----
+ * User 1 is logged in from the start; user 2 ("Player 2", red) logs in when a second gamepad first
+ * connects (runtime_pad_second_user) and stays, as a PS4 user does when their pad drops. Each
+ * login is reported once by sceUserServiceGetEvent. */
+#define USER2_ID 2
+static int logins_reported;
+static int logged_in(int32_t id) { return id==USER_ID || (id==USER2_ID && runtime_pad_second_user()); }
 static ABI int32_t user_initialize(const void *params) { (void)params; note("UserService initialized (user 1 logged in)"); return 0; }
 static ABI int32_t user_terminate(void) { return 0; }
 static ABI int32_t user_initial(int32_t *id) { if (!id) return USER_INVALID_ARGUMENT; *id=USER_ID; return 0; }
 static ABI int32_t user_list(int32_t *ids) {
     if (!ids) return USER_INVALID_ARGUMENT;
-    ids[0]=USER_ID; ids[1]=ids[2]=ids[3]=-1; return 0;
+    ids[0]=USER_ID; ids[1]=logged_in(USER2_ID) ? USER2_ID : -1; ids[2]=ids[3]=-1; return 0;
 }
 static ABI int32_t user_name(int32_t id,char *name,uint64_t size) {
-    if (id!=USER_ID || !name) return USER_INVALID_ARGUMENT;
-    if (sizeof USER_NAME>size) return (int32_t)0x8096000a; /* BUFFER_TOO_SHORT */
-    strcpy(name,USER_NAME); return 0;
+    if (!logged_in(id) || !name) return USER_INVALID_ARGUMENT;
+    const char *n=id==USER_ID ? USER_NAME : "Player 2";
+    if (strlen(n)+1>size) return (int32_t)0x8096000a; /* BUFFER_TOO_SHORT */
+    strcpy(name,n); return 0;
 }
-/* sceUserServiceGetUserColor(user, color): 0 blue, 1 red, 2 green, 3 pink. The one user is
- * player 1, blue (shadPS4 keeps that 1-based, as its pad code reads it, but returns it raw). */
+/* sceUserServiceGetUserColor(user, color): 0 blue, 1 red, 2 green, 3 pink, by login order
+ * (shadPS4 keeps that 1-based, as its pad code reads it, but returns it raw). */
 static ABI int32_t user_color(int32_t id,int32_t *color) {
-    if (id!=USER_ID || !color) return USER_INVALID_ARGUMENT;
-    *color=0; return 0;
+    if (!logged_in(id) || !color) return USER_INVALID_ARGUMENT;
+    *color=id-1; return 0;
 }
+/* sceUserServiceGetEvent(event): {type, user}; type 0 is LOGIN. */
 static ABI int32_t user_event(int32_t *event) {
     if (!event) return USER_INVALID_ARGUMENT;
     pthread_mutex_lock(&lock);
-    int pending=login_event_pending; login_event_pending=0;
+    int id=0;
+    if (logins_reported<1) id=USER_ID;
+    else if (logins_reported<2 && runtime_pad_second_user()) id=USER2_ID;
+    if (id) logins_reported=id;
     pthread_mutex_unlock(&lock);
-    if (!pending) return USER_NO_EVENT;
-    event[0]=0; event[1]=USER_ID; /* LOGIN */
+    if (!id) return USER_NO_EVENT;
+    if (id==USER2_ID) note("UserService: user 2 logged in");
+    event[0]=0; event[1]=id; /* LOGIN */
     return 0;
 }
 

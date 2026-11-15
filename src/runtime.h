@@ -156,6 +156,8 @@ uintptr_t runtime_pad_resolve(const char *name);
 void runtime_pad_report(void);
 /* deadnation --gamepad: prints one "Gamepad:" line for the first pad found (returns 1) or none (0). */
 int runtime_pad_describe(void);
+/* A second gamepad has connected: user 2 is logged in from then on (runtime_services.c). */
+int runtime_pad_second_user(void);
 uintptr_t runtime_rtc_resolve(const char *name);
 uintptr_t runtime_json_resolve(const char *name);
 uintptr_t runtime_fiber_resolve(const char *name);
