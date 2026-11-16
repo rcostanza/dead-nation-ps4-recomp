@@ -48,12 +48,16 @@ them skip without them.
 - Game-specific code lives in `src/runtime_game.c`, keyed by eboot sha256 (01.03 update, 01.00 dump)
   in `known_builds`, every site byte-checked before patching:
   - screens: screen manager push/pop hooked at entry (stub records rdi); stack vector at manager
-    +0xa8/+0xb0, top screen's vtable[2] is its name. Logged as `Screen: <name>`.
+    +0xa8/+0xb0, top screen's vtable[2] is its name. Logged as `Screen: <name>`. The stub also
+    zeroes `updates.wanted`, so a screen change ends the frame's updates: a second update in the
+    frame after Screen_Post_Game_Save's push double-freed a render resource (issue #5).
   - frame clock (01.03 +0x1bf6958): set_fps is vtable slot 3, target at +8, step at +0xc. The game
     sets 30 at boot. The update loop (0xcaf980) ran one update a frame of the step and dropped the
     rest; `patch_updates` makes it run `updates.wanted` fixed steps (set per flip by `update_count`
     from real time, 1 to fps/30), so game speed stays real time when the PC falls short of the rate.
     Keep the step fixed: a variable step (the frame's time) broke the zombies' walk animation.
+    `debug_speed=2..4` (settings.ini, debugging) multiplies the real time `update_count` owes, so
+    each frame runs that many more fixed steps (capped at 32, `tick_mask`'s bits).
   - item script ticks (`patch_logic`): the Lua scripts count update ticks, not seconds (weapon fire
     rate, cooldowns), so the items' (weapons') scripts stay at the PS4's 30 a second at any frame
     rate: the per-item runner call in the item job (01.03 0xdf04d8 to 0xdf38f0) is skipped on frames

@@ -74,6 +74,9 @@ int deadnation_skip_intro(void);
  * changes it while the game runs. The PS4 vblank runs at it and the engine's target frame rate is set to
  * match at each flip (runtime_game.c). Valid once deadnation_gpu_init returned; any thread. */
 int deadnation_frame_rate(void);
+/* settings.ini debug_speed (DEADNATION_DEBUG_SPEED, debugging): the game runs 1 to 4 times faster
+ * than real time (runtime_game.c update_count); 1 by default. Any thread. */
+int deadnation_debug_speed(void);
 /* Sets frame_rate (one of 30, 60, 90, 120, 144, 180) until the next start; any thread. */
 void deadnation_set_frame_rate(int rate);
 /* sceCommonDialogInitialize ran (runtime_services.c): the upstream dialog libraries check it. */

@@ -187,6 +187,9 @@ struct Values {
     /// (videoout driver) and the engine's target frame rate (src/runtime_game.c, at each flip)
     /// follow it, so the game speed stays the same; the Display Settings panel changes it live.
     std::atomic<int> frame_rate{60};
+    /// Debug (key debug_speed, DEADNATION_DEBUG_SPEED): the game runs this many times faster than
+    /// real time, 1 to 4 (src/runtime_game.c update_count); 1, normal speed, by default.
+    std::atomic<int> debug_speed{1};
     /// Speaker layout of the game's audio (AudioChannels), read when the game opens its ports.
     std::atomic<int> audio_channels{AudioChannelsAuto};
     /// RenderResolution, 1080p by default; read once, before the game starts.

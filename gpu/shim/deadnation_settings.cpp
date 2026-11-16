@@ -75,6 +75,11 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         if (!value.empty() && !listed) {
             std::printf("Settings: frame_rate=%s is not 30, 60, 90, 120, 144, 180, 240 or 360; using 60\n", value.c_str());
         }
+    } else if (key == "debug_speed") {
+        v.debug_speed = std::clamp(i, 1, 4);
+        if (!value.empty() && (i < 1 || i > 4)) {
+            std::printf("Settings: debug_speed=%s is not 1 to 4; using %d\n", value.c_str(), v.debug_speed.load());
+        }
     } else if (key == "audio_channels") {
         v.audio_channels = ParseAudioChannels(value);
     } else if (key == "render_resolution") {
@@ -218,6 +223,7 @@ void Load() {
         {"DEADNATION_RENDER_RESOLUTION", "render_resolution"},
 
         {"DEADNATION_SHARPENING", "sharpening"},
+        {"DEADNATION_DEBUG_SPEED", "debug_speed"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env); value && value[0]) {
@@ -277,6 +283,10 @@ extern "C" int deadnation_title_back_exits(void) {
 
 extern "C" int deadnation_frame_rate(void) {
     return DeadNationSettings::EffectiveFrameRate();
+}
+
+extern "C" int deadnation_debug_speed(void) {
+    return DeadNationSettings::Get().debug_speed.load(std::memory_order_relaxed);
 }
 
 extern "C" void deadnation_set_frame_rate(int rate) {

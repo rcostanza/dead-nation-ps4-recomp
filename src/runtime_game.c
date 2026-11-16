@@ -67,16 +67,25 @@ void runtime_game_identify(const char *title_id, const char *app_version, const 
  * Each screen's vtable slot 2 returns its name. The manager is an object the game passes around,
  * so the push and pop methods are hooked at their entry: a stub records the manager (rdi) in
  * `screen_manager`, replays the 6 bytes of prologue it replaced (push rbp; mov rbp,rsp;
- * push r15) and jumps back. */
+ * push r15) and jumps back.
+ * It also ends the frame's updates (patch_updates) after the one running: the PS4 ran one update a
+ * frame, so a screen change was always followed by a render before the next update. A second update
+ * in the same frame after the mission end (Screen_Post_Game_Save) crashed the game in the libc free
+ * of a render resource, released twice (debug_speed=2, or 4K at 144 FPS short of its rate). */
 static void *volatile screen_manager;
 static const unsigned char screen_prologue[6]={0x55,0x48,0x89,0xe5,0x41,0x57};
+/* patch_updates: the updates the next frame runs (`wanted`, set at each flip), those it has run
+ * (`done`, written by the loop after each update). */
+static struct { volatile int32_t wanted, done; } updates={1,0};
 
 static unsigned char *hook_entry(unsigned char *image, uint32_t at, unsigned char *stub) {
     unsigned char *t=stub;
-    const uint64_t slot=(uint64_t)(uintptr_t)&screen_manager;
+    const uint64_t slot=(uint64_t)(uintptr_t)&screen_manager, wanted=(uint64_t)(uintptr_t)&updates.wanted;
     *t++=0x50;                                                  /* push rax */
     *t++=0x48; *t++=0xb8; memcpy(t,&slot,8); t+=8;              /* mov rax,&screen_manager */
     *t++=0x48; *t++=0x89; *t++=0x38;                            /* mov [rax],rdi */
+    *t++=0x48; *t++=0xb8; memcpy(t,&wanted,8); t+=8;            /* mov rax,&updates.wanted */
+    *t++=0xc7; *t++=0x00; memset(t,0,4); t+=4;                  /* mov dword [rax],0 */
     *t++=0x58;                                                  /* pop rax */
     memcpy(t,screen_prologue,6); t+=6;                          /* the replaced prologue */
     const int32_t back=(int32_t)((image+at+6)-(t+5));
@@ -283,9 +292,7 @@ static unsigned char *patch_view_rect(unsigned char *image, unsigned char *stub)
  * tick sees it released and the next one sees it again if it came back (a turbo button's presses
  * and releases, at most 15 of each a second). At 30 FPS every frame is a tick and nothing changes. */
 static volatile unsigned char logic_tick=1;
-/* patch_updates: the updates the next frame runs (`wanted`, set at each flip), those it has run
- * (`done`, written by the loop after each update) and which of them tick the item scripts. */
-static struct { volatile int32_t wanted, done; } updates={1,0};
+/* Which of the frame's updates (patch_updates) tick the item scripts. */
 static volatile uint32_t tick_mask=1;
 static int updates_patched;
 enum { item_slots=8192, item_event_max=19, item_tracked=24 };
@@ -520,19 +527,28 @@ static void speed_check(double dt, double ran, int rate) {
  * the last flip holds, at least 1 and at most fps/30 (down to 30 FPS the game keeps real time;
  * below, it slows, as on the PS4). `owed` carries what is left, and what one update gave a quick
  * frame (flips jitter around 1/fps), so on time it is one update a frame, as before. Also picks
- * which of them tick the item scripts, 30 a second (patch_logic). */
+ * which of them tick the item scripts, 30 a second (patch_logic). settings.ini debug_speed (2 to 4)
+ * runs that many times the game time per real second: as many more fixed steps a frame (at most
+ * 32, tick_mask's bits), item ticks included, so the game runs as at 1x, only faster. */
 static void update_count(void) {
     static uint64_t last;
     static double owed, ticks, last_step;
+    static int shown_speed=1;
     struct timespec now; clock_gettime(CLOCK_MONOTONIC,&now);
     const uint64_t ns=(uint64_t)now.tv_sec*1000000000u+(uint64_t)now.tv_nsec;
     const int rate=clock_state>0 ? deadnation_frame_rate() : 30;
+    const int speed=updates_patched && clock_state>0 ? deadnation_debug_speed() : 1;
+    if (speed!=shown_speed) {
+        printf("Debug: game speed %dx (settings.ini debug_speed)\n",speed);
+        shown_speed=speed;
+    }
     const double step=1.0/rate;
-    const int most=rate/30>1 ? rate/30 : 1;
+    int most=(rate/30>1 ? rate/30 : 1)*speed;
+    if (most>32) most=32;
     if (last) {
         const int ran=updates_patched ? updates.done : 1; /* unpatched, the loop runs one a frame */
-        owed+=(double)(ns-last)*1e-9;
-        speed_check((double)(ns-last)*1e-9,ran*last_step,rate);
+        owed+=(double)(ns-last)*1e-9*speed;
+        speed_check((double)(ns-last)*1e-9,ran*last_step/speed,rate);
     }
     last_step=step;
     last=ns;

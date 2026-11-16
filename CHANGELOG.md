@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4
+
+- Possible fix for the game crashing at the end of a level, when the PC can't hold the FPS cap (seen at 4K and 144 FPS)
+- Added a `debug_speed` setting (settings.ini, 2 to 4) that runs the game faster, for testing
+
 ## v0.3
 
 - No need to run the setup again after updating: the game prepares itself on its first start
