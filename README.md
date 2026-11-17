@@ -23,6 +23,8 @@ This requires a decrypted dump of your own copy of the game. Tested with **CUSA0
 - **Display settings in the game:** press **F10**, or hold **Select** (View, Back, Share) for two
   seconds, for window mode, resolution, aspect ratio, VSync, frame rate and more, styled after the game's menus.
 - **Settings outside the game:** `settings.exe` (beside the game and the setup; `settings` on Linux) shows the same page, plus speakers, intro skip and the title screen's Back, and saves each change at once. Keyboard, mouse or gamepad.
+- **Cheat menu:** press **L3+R3** (both sticks; **X+M** on the keyboard) to pause the game and switch cheats on or off: invulnerability, instant dash recovery, all weapons, all items, infinite money, ammo and items, no reload, maxed weapon upgrades and all armors. Triangle (**H**) turns them all off. Your choices are kept for the next start.
+  - Unlocked weapons, items and upgrades stay in the game in progress (and its save) after you turn them off, and unlocked armors (campaign and Arcade) stay in your profile.
 - **AMD FSR 1 RCAS sharpening**, on by default, switchable in the panel or with **F9**.
 - **Keyboard and any gamepad.** DualShock 4 and DualSense work as they are, Xbox-style pads by
   button position. Two gamepads for local co-op.
@@ -117,6 +119,7 @@ For local co-op, connect a second gamepad: it signs in player 2, as a second PS4
 | --------------------------------------------------------- | ----------------------------------------------- |
 | **F10**, or hold **Select** 2 s                           | Display Settings                                |
 | **F9**                                                    | sharpening on or off                            |
+| **L3+R3** (keyboard **X+M**)                              | cheat menu (the game pauses while it is open)   |
 | **F4**, **Select+Start**, or **Back** on the title screen | asks "Exit Dead Nation?" (No is selected first) |
 | **Alt+F4**                                                | closes the game without confirmation            |
 

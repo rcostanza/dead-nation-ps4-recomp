@@ -77,6 +77,21 @@ int deadnation_frame_rate(void);
 /* settings.ini debug_speed (DEADNATION_DEBUG_SPEED, debugging): the game runs 1 to 4 times faster
  * than real time (runtime_game.c update_count); 1 by default. Any thread. */
 int deadnation_debug_speed(void);
+/* The cheats that are on (settings.ini cheat_* keys, the cheat menu: L3+R3), DEADNATION_CHEAT_* bits;
+ * any thread. runtime_game.c applies them at each flip. */
+enum {
+    DEADNATION_CHEAT_INVULNERABLE = 1, DEADNATION_CHEAT_ALL_WEAPONS = 2, DEADNATION_CHEAT_ALL_ITEMS = 4,
+    DEADNATION_CHEAT_MONEY = 8, DEADNATION_CHEAT_AMMO = 16, DEADNATION_CHEAT_ITEMS = 32,
+    DEADNATION_CHEAT_NO_RELOAD = 64, DEADNATION_CHEAT_WEAPON_UPGRADES = 128, DEADNATION_CHEAT_ARMOR = 256,
+    DEADNATION_CHEAT_DASH = 512
+};
+unsigned deadnation_cheats(void);
+/* 1 while the cheat menu is open: the game thread waits at its next flip (runtime_game.c), so the
+ * game is frozen and the presenter shows its last frame under the menu. Any thread. */
+int deadnation_cheat_menu_open(void);
+/* Scripted runs (DEADNATION_PAD_FILE "cheats[=seconds]"): opens the cheat menu, closed again after
+ * `seconds` when not 0 (the frozen game reads no pad file). Any thread. */
+void deadnation_gpu_open_cheats(int seconds);
 /* Sets frame_rate (one of 30, 60, 90, 120, 144, 180) until the next start; any thread. */
 void deadnation_set_frame_rate(int rate);
 /* sceCommonDialogInitialize ran (runtime_services.c): the upstream dialog libraries check it. */

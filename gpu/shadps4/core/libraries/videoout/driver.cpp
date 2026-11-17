@@ -784,7 +784,9 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                 if (display_tick || timer.GetTotalWait().count() < 0) { // Dont draw too fast
                     if (!main_port.is_open) {
                         DrawBlankFrame();
-                    } else if (ImGui::Core::MustKeepDrawing()) {
+                    } else if (ImGui::Core::MustKeepDrawing() || DeadNationOverlay::CheatsOpen()) {
+                        // deadnation: the cheat menu holds the game at its flip; the last frame
+                        // is shown again under it.
                         DrawLastFrame();
                     }
                 }

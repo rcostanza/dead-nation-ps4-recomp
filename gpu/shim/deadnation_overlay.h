@@ -59,6 +59,10 @@ bool CapturesInput();
 void OpenDisplaySettings();
 bool DisplaySettingsOpen();
 
+/// Any thread: the cheat menu (also L3+R3, or X+M): the game waits at its flip while it is open.
+void OpenCheats();
+bool CheatsOpen();
+
 /// Any thread: asks "Exit DeadNation?" with No focused (also F4 or Select+Start; Back on the title screen); Yes
 /// pushes SDL_EVENT_QUIT (as closing the window). It takes the input while open.
 void OpenExitPrompt();

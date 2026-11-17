@@ -90,6 +90,11 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         if (!lower.empty() && lower != "720p" && lower != "1080p" && lower != "1440p" && lower != "4k" && lower != "2160p") {
             std::printf("Settings: render_resolution=%s is not 720p, 1080p, 1440p or 4k; using 1080p\n", value.c_str());
         }
+    } else if (const auto cheat = std::find(std::begin(CheatKeys), std::end(CheatKeys), key);
+               cheat != std::end(CheatKeys)) {
+        const unsigned bit = 1u << (cheat - std::begin(CheatKeys));
+        if (Truthy(value)) v.cheats |= bit;
+        else v.cheats &= ~bit;
     } else {
         std::printf("Settings: unknown key %s\n", key.c_str());
     }
@@ -98,7 +103,7 @@ void Set(Values& v, const std::string& key, const std::string& value) {
 std::vector<std::pair<std::string, std::string>> DisplayKeys() {
     const auto& v = Get();
     const int monitor = v.monitor;
-    return {
+    std::vector<std::pair<std::string, std::string>> keys{
         {"display_mode", std::string(DeadNationGraphics::DisplayModeKeys[std::clamp(v.display_mode.load(), 0, 2)])},
         {"monitor", monitor < 0 ? std::string() : std::to_string(monitor)},
         {"aspect_ratio", std::string(AspectRatioKeys[std::clamp(v.aspect_ratio.load(), 0, AspectRatioCount - 1)])},
@@ -109,6 +114,9 @@ std::vector<std::pair<std::string, std::string>> DisplayKeys() {
         {"render_resolution", std::string(RenderResolutionKeys[std::clamp(v.render_resolution.load(), 0, RenderResolutionCount - 1)])},
         {"sharpening", v.sharpening ? "1" : "0"},
     };
+    const unsigned cheats = v.cheats;
+    for (int c = 0; c < CheatCount; ++c) keys.emplace_back(CheatKeys[c], cheats >> c & 1 ? "1" : "0");
+    return keys;
 }
 
 std::mutex save_mutex;
@@ -283,6 +291,10 @@ extern "C" int deadnation_title_back_exits(void) {
 
 extern "C" int deadnation_frame_rate(void) {
     return DeadNationSettings::EffectiveFrameRate();
+}
+
+extern "C" unsigned deadnation_cheats(void) {
+    return DeadNationSettings::Get().cheats.load(std::memory_order_relaxed);
 }
 
 extern "C" int deadnation_debug_speed(void) {

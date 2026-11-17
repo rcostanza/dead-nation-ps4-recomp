@@ -146,6 +146,17 @@ inline void ListResolutions(std::vector<std::pair<int, int>> (&out)[AspectRatioC
     }
 }
 
+/// Cheats (the cheat menu, L3+R3: deadnation_overlay.cpp; applied by src/runtime_game.c), one
+/// settings.ini key each (cheat_invulnerable=1), kept across starts. Bit i of Values::cheats is
+/// Cheat i; the bits are DEADNATION_CHEAT_* in deadnation_gpu.h.
+enum Cheat : int {
+    CheatInvulnerable, CheatAllWeapons, CheatAllItems, CheatMoney, CheatAmmo, CheatItems, CheatNoReload,
+    CheatWeaponUpgrades, CheatArmor, CheatDash, CheatCount
+};
+inline constexpr std::string_view CheatKeys[CheatCount] = {
+    "cheat_invulnerable", "cheat_all_weapons", "cheat_all_items", "cheat_infinite_money", "cheat_infinite_ammo",
+    "cheat_infinite_items", "cheat_no_reload", "cheat_max_weapon_upgrades", "cheat_unlock_armors", "cheat_instant_dash"};
+
 struct Values {
     /// DeadNationGraphics::DisplayMode (key display_mode: windowed, borderless, fullscreen);
     /// borderless by default, so the picture is scaled to the desktop resolution.
@@ -199,6 +210,8 @@ struct Values {
     /// FSR 1 RCAS sharpening of the picture as the window shows it (key sharpening,
     /// DEADNATION_SHARPENING; on by default): the presenter reads it at each frame.
     std::atomic<bool> sharpening{true};
+    /// The cheats that are on (bit i: Cheat i), all off by default; any thread.
+    std::atomic<unsigned> cheats{0};
 };
 
 Values& Get();
@@ -208,7 +221,7 @@ Values& Get();
 void Load();
 
 /// Writes the display keys (display_mode, monitor, aspect_ratio, window, vsync, tearing, frame_rate,
-/// render_resolution, sharpening) into Path() in place: their lines are replaced, missing ones
+/// render_resolution, sharpening, the cheat_* keys) into Path() in place: their lines are replaced, missing ones
 /// appended, the rest kept (from the default file until Path() exists).
 void SaveDisplay();
 

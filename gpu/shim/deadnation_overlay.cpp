@@ -111,6 +111,12 @@ constexpr auto kResolutionSettle = std::chrono::seconds(1);
 // guarded by imgui_mutex.
 std::atomic<bool> exit_open{false};
 int exit_focus = 0;
+// The cheat menu (L3+R3, or X+M on the keyboard): a row per DeadNationSettings::Cheat, toggled
+// On/Off. The game waits at its flip while it is open (src/runtime_game.c), so it is frozen; the
+// focused row is guarded by imgui_mutex, the values live in DeadNationSettings::Values::cheats.
+std::atomic<bool> cheats_open{false};
+int cheat_row = 0;
+std::atomic<s64> cheats_close_at{0}; // scripted runs: when the menu closes by itself (0: never)
 enum DisplayRow : int { RowAspect, RowMode, RowResolution, RowMonitor, RowVsync, RowFps, RowRender, RowSharpen, RowCount };
 
 // The game's menu colours (deadnation_page.h), as the overlay's sRGB image takes them.
@@ -461,6 +467,47 @@ DisplayRowText DisplayRowAt(int row) {
     }
 }
 
+struct CheatText {
+    const char* label;
+    const char* help;
+};
+// Indexed by DeadNationSettings::Cheat.
+constexpr CheatText kCheats[DeadNationSettings::CheatCount] = {
+    {"Invulnerability", "Nothing hurts you: zombies, explosions and fire take no health. Both players in co-op."},
+    {"Unlock all weapons",
+     "Every weapon the game mode has is yours, loaded, without buying it. Weapons unlocked this way stay "
+     "unlocked in the game in progress (and its save) when this is turned off."},
+    {"Unlock all items",
+     "Every item (flares, grenades, mines, dynamite, auto-turret...) the game mode has is yours, stocked. "
+     "Like weapons, they stay unlocked in the game in progress."},
+    {"Infinite money", "Your cash is kept at 9,999,999: buy anything in the shops."},
+    {"Infinite ammo", "Spare ammo never runs out: every weapon's reserve stays full. Clips still need reloading."},
+    {"Infinite items", "Thrown and placed items are never used up: their count stays full."},
+    {"Infinite clip (no reload)", "The weapon's clip stays full, so it never needs reloading."},
+    {"Max weapon upgrades",
+     "Every upgrade of every weapon and item at its highest level: clip, power, rate of fire, range... "
+     "They stay upgraded in the game in progress when this is turned off."},
+    {"Unlock all armors",
+     "Unlocks every armor piece (arms, torso and legs), in the campaign and in Arcade, to pick on the armor "
+     "screens. They are saved to your profile and stay unlocked when this is turned off."},
+    {"Dash recovers immediately", "Dash (rush) is ready again at once: no wait for its bar to refill."},
+};
+// The menu's rows, as Cheat values: dash next to invulnerability (new cheats take the next bit,
+// so the settings keep theirs).
+constexpr int kCheatOrder[DeadNationSettings::CheatCount] = {
+    DeadNationSettings::CheatInvulnerable, DeadNationSettings::CheatDash,  DeadNationSettings::CheatAllWeapons,
+    DeadNationSettings::CheatAllItems,     DeadNationSettings::CheatMoney, DeadNationSettings::CheatAmmo,
+    DeadNationSettings::CheatItems,        DeadNationSettings::CheatNoReload,
+    DeadNationSettings::CheatWeaponUpgrades, DeadNationSettings::CheatArmor,
+};
+
+// imgui_mutex held. Saved when the menu closes.
+void CloseCheats() {
+    cheats_open = false;
+    DeadNationSettings::SaveDisplayIfChanged();
+    std::puts("Overlay: cheat menu closed; the game resumes");
+}
+
 // The pages draw with deadnation_page.h, the game's menu look (shared with settings.exe).
 DeadNationPage::Fonts PageFonts() { return {page_light, page_bold}; }
 
@@ -483,6 +530,30 @@ void DisplaySettingsBox() {
     DeadNationPage::SettingsPage(ImGui::GetWindowDrawList(), PageInk, PageFonts(), viewport->Pos, viewport->Size,
                                  "DISPLAY SETTINGS", rows, display_row, hints, 3,
                                  "Keyboard: arrows, Enter, Esc  |  Hold Select or F10 to close");
+    ImGui::End();
+    ImGui::PopStyleVar();
+}
+
+// The cheat menu, as the Display Settings page: a list of On/Off rows.
+void CheatsBox() {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->Pos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(viewport->Size, ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::Begin("##cheats", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs |
+                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
+    const unsigned on = DeadNationSettings::Get().cheats;
+    std::vector<DeadNationPage::Row> rows;
+    for (const int c : kCheatOrder) {
+        rows.push_back({kCheats[c].label, on >> c & 1 ? "On" : "Off", kCheats[c].help});
+    }
+    using DeadNationPage::Glyph;
+    const DeadNationPage::Hint hints[4] = {
+        {Glyph::UpDown, "Move"}, {Glyph::Cross, "Change"}, {Glyph::Triangle, "All off"}, {Glyph::Circle, "Back"}};
+    DeadNationPage::SettingsPage(ImGui::GetWindowDrawList(), PageInk, PageFonts(), viewport->Pos, viewport->Size,
+                                 "CHEATS", rows, cheat_row, hints, 4,
+                                 "Keyboard: arrows, Enter, H all off, Esc  |  L3+R3 or X+M to close  |  The game is paused");
     ImGui::End();
     ImGui::PopStyleVar();
 }
@@ -607,6 +678,58 @@ bool HandleDisplayEvent(const SDL_Event& event) {
         CloseDisplaySettings();
     }
     return true;
+}
+
+// imgui_mutex held. The cheat menu takes every key and button while it is open: up/down moves,
+// left/right or confirm switches the focused cheat, Triangle (H) turns them all off, cancel, Start
+// or a stick click closes it.
+bool HandleCheatEvent(const SDL_Event& event) {
+    int move = 0;
+    bool toggle = false, close = false, all_off = false;
+    if (event.type == SDL_EVENT_KEY_DOWN) {
+        const SDL_Keycode key = event.key.key;
+        move = key == SDLK_UP || key == SDLK_W ? -1 : key == SDLK_DOWN || key == SDLK_S ? 1 : 0;
+        toggle = !event.key.repeat && (key == SDLK_LEFT || key == SDLK_A || key == SDLK_RIGHT || key == SDLK_D ||
+                                       key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE);
+        close = !event.key.repeat &&
+                (key == SDLK_ESCAPE || key == SDLK_BACKSPACE || key == SDLK_X || key == SDLK_M);
+        all_off = !event.key.repeat && key == SDLK_H;
+    } else if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+        const u8 button = event.gbutton.button;
+        move = button == SDL_GAMEPAD_BUTTON_DPAD_UP ? -1 : button == SDL_GAMEPAD_BUTTON_DPAD_DOWN ? 1 : 0;
+        toggle = button == SDL_GAMEPAD_BUTTON_DPAD_LEFT || button == SDL_GAMEPAD_BUTTON_DPAD_RIGHT ||
+                 button == SDL_GAMEPAD_BUTTON_SOUTH;
+        close = button == SDL_GAMEPAD_BUTTON_EAST || button == SDL_GAMEPAD_BUTTON_START ||
+                button == SDL_GAMEPAD_BUTTON_LEFT_STICK || button == SDL_GAMEPAD_BUTTON_RIGHT_STICK;
+        all_off = button == SDL_GAMEPAD_BUTTON_NORTH;
+    } else {
+        return event.type == SDL_EVENT_KEY_UP || event.type == SDL_EVENT_GAMEPAD_BUTTON_UP;
+    }
+    if (move) {
+        cheat_row = (cheat_row + move + DeadNationSettings::CheatCount) % DeadNationSettings::CheatCount;
+    }
+    if (toggle) {
+        const int cheat = kCheatOrder[cheat_row];
+        auto& cheats = DeadNationSettings::Get().cheats;
+        const unsigned now = cheats.fetch_xor(1u << cheat) ^ (1u << cheat);
+        std::printf("Overlay: cheat %s %s\n", kCheats[cheat].label, now >> cheat & 1 ? "on" : "off");
+    }
+    if (all_off) {
+        DeadNationSettings::Get().cheats = 0;
+        std::puts("Overlay: every cheat off");
+    }
+    if (close) {
+        CloseCheats();
+    }
+    return true;
+}
+
+// imgui_mutex held: opens the cheat menu (the game freezes at its next flip).
+void OpenCheatsLocked() {
+    if (cheats_open) return;
+    cheat_row = 0;
+    cheats_open = true;
+    std::puts("Overlay: cheat menu opened; the game is paused");
 }
 
 void LoadingScreen() {
@@ -885,7 +1008,7 @@ void DrawWindows() {
         LoadingScreen();
     }
     float corner = ImGui::GetMainViewport()->WorkPos.y + ImGui::GetMainViewport()->WorkSize.y - 12.0f * base_scale;
-    if (NoticeActive() && !display_open && !exit_open) { // their button hints use the bottom of the screen
+    if (NoticeActive() && !display_open && !exit_open && !cheats_open) { // their button hints use the bottom of the screen
         Notice(corner);
     }
     if (PrefetchActive() && !loading) {
@@ -907,6 +1030,12 @@ void DrawWindows() {
         DisplaySettingsBox();
     } else if (exit_open && !choice_active) {
         ExitPromptBox();
+    } else if (cheats_open && !choice_active) {
+        CheatsBox();
+        if (const s64 at = cheats_close_at; at && NowMs() >= at) {
+            cheats_close_at = 0;
+            CloseCheats();
+        }
     }
 }
 
@@ -970,6 +1099,30 @@ bool HandleEvent(const SDL_Event& event) {
     if (exit_open) {
         return HandleExitEvent(event);
     }
+    if (cheats_open) {
+        return HandleCheatEvent(event);
+    }
+    // L3+R3 (either stick clicked while the other is held) opens the cheat menu; on the keyboard,
+    // X and M (the keys of L3 and R3, src/runtime_pad.c).
+    if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && (event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK ||
+                                                        event.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_STICK)) {
+        SDL_Gamepad* pad = SDL_GetGamepadFromID(event.gbutton.which);
+        const auto other = event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK ? SDL_GAMEPAD_BUTTON_RIGHT_STICK
+                                                                                 : SDL_GAMEPAD_BUTTON_LEFT_STICK;
+        if (pad && SDL_GetGamepadButton(pad, other)) {
+            OpenCheatsLocked();
+            return true;
+        }
+    }
+    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && !text_entry_active &&
+        (event.key.scancode == SDL_SCANCODE_X || event.key.scancode == SDL_SCANCODE_M)) {
+        const bool* keys = SDL_GetKeyboardState(nullptr);
+        const SDL_Scancode other = event.key.scancode == SDL_SCANCODE_X ? SDL_SCANCODE_M : SDL_SCANCODE_X;
+        if (keys && keys[other]) {
+            OpenCheatsLocked();
+            return true;
+        }
+    }
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F10 && !event.key.repeat && !text_entry_active) {
         display_row = 0;
         display_open = true;
@@ -1023,6 +1176,15 @@ void OpenDisplaySettings() {
 
 bool DisplaySettingsOpen() {
     return display_open;
+}
+
+void OpenCheats() {
+    std::scoped_lock lock{imgui_mutex};
+    OpenCheatsLocked();
+}
+
+bool CheatsOpen() {
+    return cheats_open;
 }
 
 void OpenExitPrompt() {
@@ -1099,11 +1261,11 @@ bool Visible() {
     const int splash = splash_state;
     return initialized && (splash == SplashShown || splash == SplashFading || loading ||background_total || PrefetchActive() || CompileNoteActive() ||
                            text_entry_active || choice_active || choice_retiring || NoticeActive() || display_open ||
-                           exit_open);
+                           exit_open || cheats_open);
 }
 
 bool CapturesInput() {
-    return text_entry_active || choice_active || display_open || exit_open;
+    return text_entry_active || choice_active || display_open || exit_open || cheats_open;
 }
 
 void BeginChoice(const std::string& title, const std::vector<std::string>& items,
@@ -1189,6 +1351,15 @@ extern "C" void deadnation_gpu_open_display_settings(int row) {
     DeadNationOverlay::OpenDisplaySettings();
     std::scoped_lock lock{DeadNationOverlay::imgui_mutex};
     DeadNationOverlay::display_row = std::clamp(row, 0, int(DeadNationOverlay::RowCount) - 1);
+}
+
+extern "C" void deadnation_gpu_open_cheats(int seconds) {
+    DeadNationOverlay::OpenCheats();
+    if (seconds > 0) DeadNationOverlay::cheats_close_at = DeadNationOverlay::NowMs() + seconds * 1000LL;
+}
+
+extern "C" int deadnation_cheat_menu_open(void) {
+    return DeadNationOverlay::CheatsOpen() ? 1 : 0;
 }
 
 extern "C" void deadnation_gpu_notice(const char* text, int milliseconds) {

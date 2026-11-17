@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.5
+
+- Cheat menu: press L3+R3 (X+M on the keyboard) to pause the game and pick from invulnerability, instant dash recovery, unlock all weapons and items, infinite money, ammo and items, no reload, max weapon upgrades and unlock all armors. Triangle turns them all off. Choices are remembered between sessions
+
 ## v0.4
 
 - Possible fix for the game crashing at the end of a level, when the PC can't hold the FPS cap (seen at 4K and 144 FPS)

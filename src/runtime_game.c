@@ -20,14 +20,24 @@ typedef struct {
     uint32_t screen_push, screen_pop, clock, code_end, data, data_end, render_size, persp_call, ortho_call, finalize, view_rect, ortho_aspect, view_fov;
     uint32_t item_call, item_runner; /* the items' script runner and its call (patch_logic) */
     uint32_t update_stop, update_loop; /* the update loop's stop test and loop test (patch_updates) */
+    /* Cheats (0: none for this build): the session global and its vtable, the damage function's
+     * god-mode test, the weapon table, the upgrade multiplier, the debug menu's armor unlock. */
+    uint32_t session, session_vtable, score_getter, god_test, weapon_table, upgrade_scale;
+    /* unlock_armor: the armor sets' global, vtable and array getter; the profile's global, vtable
+     * and unlock list getters (campaign, Road of Devastation) */
+    uint32_t armor_sets, armor_sets_vtable, armor_sets_getter, profile, profile_vtable, campaign_lists, road_lists;
+    uint32_t timer_start, rush_tag; /* a script timer's start (patch_dash) and the dash timer's tag */
 } Build;
 static const Build known_builds[]={
     {"09b367a222cfb6308811650ae1fb8105ea6c7726137646907b211419027aa37c","01.03",
      0xe21940,0xe21150,0x1bf6958,0x13b4920,0x13b8000,0x1bf6ef0,0xc88010,0xce352a,0xce3658,0xce2cf0,0xcebbd1,0xceb3db,0xddadd7,
-     0xdf04d8,0xdf38f0,0xcafa65,0xcafb00},
+     0xdf04d8,0xdf38f0,0xcafa65,0xcafb00,
+     0x1bf6828,0x13c7c90,0x4749f0,0x494ad9,0xf536f0,0x49cd20,
+     0x1bf6898,0x13ce1d0,0x4d4d50,0x1bf67f8,0x13c53b0,0x449250,0x4492d0,0x490b27,0x18b1098},
     {"8d2ae241ca42585d0b2601554720f198a7ef63c0b6f80fc34325883530ab8135","01.00",
      0xe1f600,0xe1f4b0,0x1bf26f8,0x13b2418,0x13b4000,0x1bf2c90,0xc866d0,0xce17aa,0xce18d8,0xce0f70,0xce9e51,0xce965b,0xdd9837,
-     0xdeeca8,0xdf20c0,0xcadce5,0xcadd80},
+     0xdeeca8,0xdf20c0,0xcadce5,0xcadd80,
+     0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, /* cheats: 01.03 only (the setup requires the update) */
 };
 static const Build *build;
 static unsigned char *game_image;
@@ -441,6 +451,182 @@ static void patch_updates(unsigned char *image) {
     updates_patched=1;
 }
 
+/* Cheats (settings.ini cheat_* keys, the cheat menu: L3+R3, deadnation_overlay.cpp), 01.03 only.
+ * The session (global 01.03 +0x1bf6828, vtable +0x13c7c90) holds the score object at +0x2050 (its
+ * vtable slot 0x78, 0x4749f0, returns it), which holds each player's record at +0x14 and +0x234:
+ * the player's number (1, 2) at +0, cash at +4, and from +0x40 the inventory, 14 entries of 0x20
+ * bytes by id (0 rifle, 1 SMG, 2 shotgun, 3 flamethrower, 4 blade cannon, 5 launcher, 6 shocker,
+ * 7 flare, 8 grenade, 9 mine, 10 molotov, 11 dynamite, 12 auto-turret, 13 health): id at +0, state
+ * at +4 (bit 0 in the shop, bit 1 owned), the levels of up to four upgrades at +8 and their highest
+ * at +0x10 (0xff: no such upgrade; an entry with none is not in the game), the clip (an item's
+ * count) at +0x18 and the spare ammo at +0x1a (int16; -1 unlimited, the rifle's). Sizes are the
+ * weapon table's (+0xf536f0, 12 bytes an id: clip at +4, spare at +8, int16) scaled by an upgrade
+ * (0x49cd20(entry, type): type 0 clip, 7 inventory), as the HUD and shop work them out. */
+static const unsigned char god_site[7]={0x41,0x83,0x7f,0x04,0x00,0x74,0x15}; /* cmp dword [r15+4],0; je +0x15 */
+static const unsigned char frame_prologue[4]={0x55,0x48,0x89,0xe5};
+static const unsigned char armor_getter[7]={0x48,0x8b,0x87,0xa0,0x00,0x00,0x00}; /* mov rax,[rdi+0xa0] */
+static const unsigned char list_getter[5]={0x83,0xfe,0x05,0x77,0x12};             /* cmp esi,5; ja */
+static const unsigned char score_getter[8]={0x48,0x8b,0x87,0x50,0x20,0x00,0x00,0xc3}; /* mov rax,[rdi+0x2050]; ret */
+static const int16_t weapon_clips[7]={16,40,4,100,5,5,100};
+static const unsigned char timer_site[11]={0xc7,0x84,0xb0,0xd0,0,0,0,0,0,0,0}; /* mov dword [rax+rsi*4+0xd0],0 */
+static int cheats_found;
+static volatile unsigned char cheat_god, cheat_dash;
+
+static int cheat_sites_found(const unsigned char *image) {
+    if (!build || !build->session) return 0;
+    for (int i=0;i<7;++i) {
+        int16_t clip; memcpy(&clip,image+build->weapon_table+12*i+4,2);
+        if (clip!=weapon_clips[i]) return 0;
+    }
+    return !memcmp(image+build->god_test,god_site,sizeof(god_site)) &&
+           !memcmp(image+build->timer_start,timer_site,sizeof(timer_site)) &&
+           !memcmp(image+build->score_getter,score_getter,sizeof(score_getter)) &&
+           !memcmp(image+build->upgrade_scale,frame_prologue,4) &&
+           !memcmp(image+build->armor_sets_getter,armor_getter,sizeof(armor_getter)) &&
+           !memcmp(image+build->campaign_lists,list_getter,sizeof(list_getter)) &&
+           !memcmp(image+build->road_lists,list_getter,sizeof(list_getter));
+}
+
+/* Invulnerability: the function that changes a character's health (01.03 0x494aa0, xmm0 the
+ * change) leaves a player's (number at +0x10 up to 1) alone when it would lower it and the
+ * character's god mode flag (+4, the scripts' VAR_GOD_MODE_ACTIVE) is set. The flag's test
+ * (cmp dword [r15+4],0; je) goes to a stub that also takes the god mode branch while `cheat_god`
+ * is set. */
+static void patch_god(unsigned char *image, unsigned char *stub) {
+    unsigned char *at=image+build->god_test, *t=stub;
+    const uint64_t flag=(uint64_t)(uintptr_t)&cheat_god;
+    *t++=0x50;                                                  /* push rax */
+    *t++=0x48; *t++=0xb8; memcpy(t,&flag,8); t+=8;              /* mov rax,&cheat_god */
+    *t++=0x80; *t++=0x38; *t++=0x00;                            /* cmp byte [rax],0 */
+    *t++=0x58;                                                  /* pop rax */
+    *t++=0x75; *t++=7;                                          /* jne god */
+    memcpy(t,god_site,5); t+=5;                                 /* cmp dword [r15+4],0 */
+    *t++=0x74; *t++=5;                                          /* je no_god */
+    int32_t rel=(int32_t)((at+7)-(t+5));
+    *t++=0xe9; memcpy(t,&rel,4); t+=4;                          /* god: jmp site+7 */
+    rel=(int32_t)((at+7+god_site[6])-(t+5));
+    *t++=0xe9; memcpy(t,&rel,4);                                /* no_god: jmp the je's target */
+    rel=(int32_t)(stub-(at+5));
+    at[0]=0xe9; memcpy(at+1,&rel,4); at[5]=at[6]=0x90;          /* jmp stub */
+}
+
+/* Dash recovers immediately: a character's script timers are four slots in its record (elapsed
+ * at +0xd0, length at +0xe0, tag at +0xf0); dashing starts the one tagged with the hash the game
+ * keeps at +0x18b1098 (the HUD's dash bar shows it), 3.6 s, and dash waits for it to run out. The
+ * timer start (01.03 0x490ad0) zeroes the elapsed time at 0x490b27; a stub stores the length
+ * there instead, the timer already run out, for that tag while `cheat_dash` is set. */
+static void patch_dash(unsigned char *image, unsigned char *stub) {
+    unsigned char *at=image+build->timer_start, *t=stub;
+    const uint64_t flag=(uint64_t)(uintptr_t)&cheat_dash, tag=(uint64_t)(uintptr_t)(image+build->rush_tag);
+    *t++=0x49; *t++=0xbb; memcpy(t,&flag,8); t+=8;              /* mov r11,&cheat_dash */
+    *t++=0x41; *t++=0x80; *t++=0x3b; *t++=0x00;                 /* cmp byte [r11],0 */
+    *t++=0x74; *t++=29;                                         /* je zero */
+    *t++=0x49; *t++=0xbb; memcpy(t,&tag,8); t+=8;               /* mov r11,&rush tag */
+    *t++=0x41; *t++=0x3b; *t++=0x13;                            /* cmp edx,[r11] (the timer's tag) */
+    *t++=0x75; *t++=14;                                         /* jne zero */
+    static const unsigned char done[9]={0xc5,0xfa,0x11,0x84,0xb0,0xd0,0,0,0}; /* vmovss [rax+rsi*4+0xd0],xmm0 */
+    memcpy(t,done,sizeof(done)); t+=sizeof(done);
+    int32_t rel=(int32_t)((at+11)-(t+5));
+    *t++=0xe9; memcpy(t,&rel,4); t+=4;                          /* jmp site+11 */
+    memcpy(t,timer_site,sizeof(timer_site)); t+=sizeof(timer_site); /* zero: the replaced store */
+    rel=(int32_t)((at+11)-(t+5));
+    *t++=0xe9; memcpy(t,&rel,4);                                /* jmp site+11 */
+    rel=(int32_t)(stub-(at+5));
+    at[0]=0xe9; memcpy(at+1,&rel,4); memset(at+5,0x90,6);       /* jmp stub */
+}
+
+/* The score object, or NULL when the session is not up (or not the one this build has). */
+static unsigned char *cheat_score(void) {
+    unsigned char *session=*(unsigned char **)(game_image+build->session);
+    if (!session || *(unsigned char **)session!=game_image+build->session_vtable) return NULL;
+    return *(unsigned char **)(session+0x2050);
+}
+
+/* Unlock all armors, as the debug menu's "Unlock armors" (01.03 0xe30c40) does for the campaign,
+ * and for Arcade (Road of Devastation) too. The armor sets (global +0x1bf6898, vtable +0x13ce1d0;
+ * slot 0x38 returns their array, begin and end, 0x7c bytes each, id at +0) are the pieces of every
+ * slot. The profile (global +0x1bf67f8, vtable +0x13c53b0) keeps a list of the unlocked ones per
+ * slot (kind 0 arms, 1 torso, 2 legs): slot 0x98 gives the campaign's, slot 0xa0 Road of
+ * Devastation's (the armor screen picks by mode, 0x5311b2). A list copies out to a set of up to 64
+ * ids ending at a 0 (its vtable slot 0, set's add 0x48ac30) and takes one back (slot 1). Run when
+ * the cheat is on as the main menu or a game starts. */
+static void unlock_armor(void) {
+    unsigned char *sets=*(unsigned char **)(game_image+build->armor_sets), *profile=*(unsigned char **)(game_image+build->profile);
+    if (!sets || !profile || *(unsigned char **)sets!=game_image+build->armor_sets_vtable ||
+        *(unsigned char **)profile!=game_image+build->profile_vtable) return;
+    void **sets_vtable=*(void ***)sets, **profile_vtable=*(void ***)profile;
+    if (sets_vtable[0x38/8]!=game_image+build->armor_sets_getter || profile_vtable[0x98/8]!=game_image+build->campaign_lists ||
+        profile_vtable[0xa0/8]!=game_image+build->road_lists) return;
+    typedef struct { const unsigned char *begin, *end; } Range;
+    typedef Range (ABI *SetsOf)(void *self);
+    typedef void *(ABI *ListOf)(void *self, int32_t kind);
+    typedef void (ABI *Copy)(void *to, void *from);
+    const Range all=((SetsOf)sets_vtable[0x38/8])(sets);
+    int added=0;
+    for (int mode=0;mode<2;++mode)
+        for (int32_t kind=0;kind<3;++kind) {
+            void *list=((ListOf)profile_vtable[(mode ? 0xa0 : 0x98)/8])(profile,kind);
+            void **list_vtable=*(void ***)list;
+            uint32_t ids[128]={0};
+            ((Copy)list_vtable[0])(ids,list);
+            for (const unsigned char *set=all.begin;set && set+0x7c<=all.end;set+=0x7c) {
+                uint32_t id; memcpy(&id,set,4);
+                int at=0;
+                while (at<64 && ids[at] && ids[at]!=id) ++at;
+                if (at<64 && !ids[at] && id) { ids[at]=id; if (at+1<64) ids[at+1]=0; ++added; }
+            }
+            ((Copy)list_vtable[1])(list,ids);
+        }
+    if (added) printf("Cheats: %d armor pieces unlocked (campaign and Arcade)\n",added);
+}
+
+/* At each flip, on the game's thread (the one that runs the game's updates). */
+static void apply_cheats(const char *screen_changed) {
+    const unsigned on=deadnation_cheats();
+    cheat_god=(on&DEADNATION_CHEAT_INVULNERABLE)!=0;
+    cheat_dash=(on&DEADNATION_CHEAT_DASH)!=0;
+    if (!cheats_found) return;
+    static unsigned last;
+    static int armor_screen;
+    if (screen_changed) armor_screen=!strcmp(screen_changed,"Screen_Main_Menu") || !strcmp(screen_changed,"Screen_Game");
+    if ((on&DEADNATION_CHEAT_ARMOR) && armor_screen && (screen_changed || !(last&DEADNATION_CHEAT_ARMOR))) unlock_armor();
+    if (on!=last) printf("Cheats: %#x\n",on);
+    last=on;
+    if (!(on&~(unsigned)(DEADNATION_CHEAT_INVULNERABLE|DEADNATION_CHEAT_ARMOR|DEADNATION_CHEAT_DASH))) return;
+    unsigned char *score=cheat_score();
+    if (!score) return;
+    typedef float (ABI *Scale)(void *entry, int32_t type);
+    const Scale scale=(Scale)(game_image+build->upgrade_scale);
+    const unsigned char *table=game_image+build->weapon_table;
+    for (int32_t p=0;p<2;++p) {
+        unsigned char *player=score+0x14+0x220*p;
+        if (*(int32_t *)player!=p+1) continue;
+        int32_t *cash=(int32_t *)(player+4);
+        if ((on&DEADNATION_CHEAT_MONEY) && *cash<9999999) *cash=9999999;
+        for (int32_t id=0;id<13;++id) {
+            unsigned char *e=player+0x40+0x20*id, *level=e+8, *top=e+0x10;
+            if (*(int32_t *)e!=id || (top[0]==0xff && top[1]==0xff && top[2]==0xff && top[3]==0xff)) continue;
+            const int item=id>=7;
+            int32_t *state=(int32_t *)(e+4);
+            int16_t clip, spare;
+            memcpy(&clip,e+0x18,2); memcpy(&spare,e+0x1a,2);
+            int given=0;
+            if ((on&(item ? DEADNATION_CHEAT_ALL_ITEMS : DEADNATION_CHEAT_ALL_WEAPONS)) && !(*state&2)) { *state|=3; given=1; }
+            if (on&DEADNATION_CHEAT_WEAPON_UPGRADES)
+                for (int k=0;k<4;++k) if (top[k]!=0xff && level[k]<top[k]) level[k]=top[k];
+            if (!(*state&2)) continue;
+            int16_t base_clip, base_spare;
+            memcpy(&base_clip,table+12*id+4,2); memcpy(&base_spare,table+12*id+8,2);
+            const int16_t full_clip=(int16_t)(base_clip*scale(e,0)), full_spare=base_spare<0 ? -1 : (int16_t)(base_spare*scale(e,7));
+            if (given && clip<=0 && spare<=0) { clip=full_clip; if (full_spare>0) spare=full_spare; }
+            if (!item && (on&DEADNATION_CHEAT_NO_RELOAD) && clip<full_clip) clip=full_clip;
+            if (!item && (on&DEADNATION_CHEAT_AMMO) && full_spare>0 && spare<full_spare) spare=full_spare;
+            if (item && (on&DEADNATION_CHEAT_ITEMS) && clip<full_clip) clip=full_clip;
+            memcpy(e+0x18,&clip,2); memcpy(e+0x1a,&spare,2);
+        }
+    }
+}
+
 void runtime_game_patch(unsigned char *image, unsigned char *patches) {
     if (!build) { puts("Screens: an eboot.bin the runner does not know; skip_intro is off"); return; }
     if (memcmp(image+build->screen_push,screen_prologue,6) || memcmp(image+build->screen_pop,screen_prologue,6)) {
@@ -453,6 +639,8 @@ void runtime_game_patch(unsigned char *image, unsigned char *patches) {
     patch_updates(image);
     patch_render_size(image,t);
     if (cameras_found(image)) patch_view_rect(image,patch_camera(image,t+64));
+    if (cheat_sites_found(image)) { patch_god(image,patches+0xe00); patch_dash(image,patches+0xe80); cheats_found=1; }
+    else printf("Cheats: eboot %s does not have them where the runner looks; the cheat menu does nothing\n",build->version);
 }
 
 /* The name of the screen showing, or NULL before the first screen change. Called on the game's
@@ -572,15 +760,22 @@ static void update_count(void) {
 /* At each flip, on the game's thread: the frame rate, the next frame's updates, and screen
  * changes (logged, and told to skip_intro in runtime_pad.c). */
 void runtime_game_frame_rate(void) {
+    /* The cheat menu pauses the game: its thread waits here, before the frame's flip, while the
+     * presenter shows the last frame under the menu (videoout driver.cpp). */
+    if (deadnation_cheat_menu_open()) {
+        const struct timespec wait={0,10000000};
+        while (deadnation_cheat_menu_open()) nanosleep(&wait,NULL);
+    }
     apply_frame_rate();
     update_count();
     static const char *last;
-    const char *screen=runtime_game_screen();
+    const char *screen=runtime_game_screen(), *changed=NULL;
     if (screen && screen!=last) {
-        last=screen;
+        last=changed=screen;
         printf("Screen: %s\n",screen);
         runtime_pad_intro_screen(screen);
     }
+    apply_cheats(changed);
 }
 
 void runtime_game_set_image(unsigned char *image) { game_image=image; }

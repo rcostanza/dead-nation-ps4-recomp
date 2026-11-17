@@ -398,6 +398,7 @@ static void read_inject(void) {
         if (!strcmp(token,"replay") && replay_armed!=1) { replay_armed=1; replay_start=0; } /* DEADNATION_PAD_REPLAY */
         if (!strcmp(token,"reconnect")) reconnect=1;
         if (!strncmp(token,"settings",8) && (!token[8] || token[8]=='=')) deadnation_gpu_open_display_settings(token[8] ? atoi(token+9) : 0);
+        if (!strncmp(token,"cheats",6) && (!token[6] || token[6]=='=')) deadnation_gpu_open_cheats(token[6] ? atoi(token+7) : 0);
         for (size_t i=0;i<sizeof(ps_names)/sizeof(*ps_names);++i) if (!strcmp(token,ps_names[i].name)) injected.buttons|=ps_names[i].ps;
         for (int i=0;i<4;++i) if (!strncmp(token,sticks[i],3)) { int v=atoi(token+3); injected.stick[i]=v<0 ? 0 : v>255 ? 255 : v; }
     }

@@ -473,7 +473,7 @@ static void hang_watch_loop(void) {
         sleep(1);
 #endif
         const unsigned long long shown=deadnation_gpu_flips();
-        if (shown!=last) { last=shown; held=0; dumped=0; continue; }
+        if (shown!=last || deadnation_cheat_menu_open()) { last=shown; held=0; dumped=0; continue; } /* the cheat menu pauses the game */
         if (!shown || dumped || ++held<hang_seconds) continue;
         hang_dump(hang_seconds);
         dumped=1;

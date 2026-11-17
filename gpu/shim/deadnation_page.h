@@ -134,7 +134,7 @@ inline void FocusBar(ImDrawList* dl, const Palette& ink, ImVec2 a, ImVec2 b, flo
 }
 
 // A pad glyph as the game's button hints draw them: a white ring with the button's mark inside.
-enum class Glyph { Cross, Circle, UpDown };
+enum class Glyph { Cross, Circle, UpDown, Triangle };
 inline void PadGlyph(ImDrawList* dl, const Palette& ink, ImVec2 c, float r, Glyph glyph, float px) {
     const float line = std::max(1.0f, 2.2f * px);
     dl->AddCircle(c, r, ink.text, 32, line);
@@ -145,6 +145,10 @@ inline void PadGlyph(ImDrawList* dl, const Palette& ink, ImVec2 c, float r, Glyp
         dl->AddLine(ImVec2(c.x - m, c.y + m), ImVec2(c.x + m, c.y - m), ink.text, line);
         break;
     case Glyph::Circle: dl->AddCircle(c, r * 0.5f, ink.text, 24, line); break;
+    case Glyph::Triangle:
+        dl->AddTriangle(ImVec2(c.x, c.y - m * 1.1f), ImVec2(c.x - m * 1.05f, c.y + m * 0.75f),
+                        ImVec2(c.x + m * 1.05f, c.y + m * 0.75f), ink.text, line);
+        break;
     case Glyph::UpDown:
         dl->AddTriangleFilled(ImVec2(c.x, c.y - m * 1.2f), ImVec2(c.x - m * 0.8f, c.y - m * 0.15f),
                               ImVec2(c.x + m * 0.8f, c.y - m * 0.15f), ink.text);

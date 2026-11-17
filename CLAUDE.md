@@ -79,6 +79,22 @@ them skip without them.
     object culling rebuilds its frustum from; plus the renderer view's vertical fov at 0xddadd7;
     without these, objects pop in at the top and bottom) and the menus' view rect (`patch_view_rect`), or the game
     cuts the sides.
+- cheats (`apply_cheats`, `patch_god`; 01.03 only, sites checked in `cheat_sites_found`): the menu
+  (overlay, L3+R3 or X+M; `DEADNATION_PAD_FILE` token `cheats=<seconds>` opens it and closes it
+  after that long) holds the game thread in `runtime_game_frame_rate` while open, and the vblank
+  loop re-presents the last frame (driver.cpp). Bits are settings.ini `cheat_*` keys
+  (`DeadNationSettings::CheatKeys`, `DEADNATION_CHEAT_*`). Session +0x1bf6828 -> score object
+  (+0x2050) -> player records at +0x14/+0x234: cash +4, inventory from +0x40 (14 entries of 0x20:
+  id, state bit 1 owned, upgrade levels +8 and highest +0x10, clip/count +0x18, spare +0x1a, int16;
+  full sizes from the weapon table +0xf536f0 scaled by 0x49cd20). Invulnerability takes the
+  damage function's own god-mode branch (0x494ad9, `character+4`). Unlock all armors (`unlock_armor`)
+  adds every armor set id to the profile's unlock lists, campaign (vtable 0x98) and Road of
+  Devastation/Arcade (0xa0), kinds 0-2, as the main menu or a game starts (the debug menu's
+  0xe30c40 does the campaign's). Instant dash
+  (`patch_dash`): the timer start (0x490ad0) stores the length as elapsed for the timer tagged with
+  the rush hash (+0x18b1098; record timers: elapsed +0xd0, length +0xe0, tag +0xf0). New cheats take
+  the next bit; the menu's row order is `kCheatOrder`. Triangle (H) turns all off. Check in Arcade:
+  dynamite (L1) at your feet kills without invulnerability.
 - The engine takes its own command-line switches (strings in the eboot: `-norumble`, `-nosound`,
   `-stresstest`, ...); pass them with `python run.py --guest-arg <switch>`.
 - `skip_intro=1` (settings.ini, default) is screen-driven (`runtime_pad_intro_screen`,
