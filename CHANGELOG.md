@@ -3,6 +3,7 @@
 ## v0.5
 
 - Cheat menu: press L3+R3 (X+M on the keyboard) to pause the game and pick from invulnerability, instant dash recovery, unlock all weapons and items, infinite money, ammo and items, no reload, max weapon upgrades and unlock all armors. Triangle turns them all off. Choices are remembered between sessions
+  - ⚠️ Warning: some cheats unlock permanent upgrades, like all armor and weapons. These are saved to your save file and cannot be undone unless a new save file is created
 
 ## v0.4
 
